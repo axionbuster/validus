@@ -31,7 +31,20 @@ pub struct VStr<Rule: ValidateString> {
 pub type vstr<Rule> = VStr<Rule>;
 
 /// Trait for validating a string slice.
+///
+/// # About `Into`
+///
+/// You can implement a hierarchy of rules by using `Into`.
+///
+/// If `RuleA: Into<RuleB>`, then `VStr<RuleA>` can be
+/// converted to `VStr<RuleB>` without error.
+///
+/// See [`self::VStr::change_rules`] for more information.
 pub trait ValidateString {
+    /// Explain why the string slice is invalid.
+    ///
+    /// (Transient errors are not allowed; all errors should
+    /// be grammatical errors in the string slice itself.)
     type Error;
 
     /// Validate a string slice.
@@ -39,7 +52,10 @@ pub trait ValidateString {
 }
 
 /// A special implementation that validates everything.
-impl ValidateString for Infallible {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ValidateAll;
+
+impl ValidateString for ValidateAll {
     type Error = Infallible;
 
     fn validate_str(_: &str) -> Result<(), Self::Error> {
@@ -57,22 +73,48 @@ impl ValidateString for () {
 }
 
 impl<Rule: ValidateString> VStr<Rule> {
-    /// Upgrade with validation.
+    /// Upgrade a `str` slice with validation.
     pub fn try_validate(s: &str) -> Result<&Self, Rule::Error> {
         Rule::validate_str(s)?;
         Ok(unsafe { transmute(s) })
     }
 
-    /// Upgrade without validation.
+    /// Upgrade a `str` slice without validation.
+    ///
+    /// (This might be useful when validation is expensive and
+    /// the underlying data can be assumed to be valid.)
     pub fn assume_valid(s: &str) -> &Self {
         // SAFETY: All guarantees of `str` follows.
         unsafe { transmute(s) }
     }
 
     /// Re-check itself.
+    ///
+    /// - If `self` was created with `try_validate`, then this should
+    /// return `Ok`.
+    /// - If `self` was created with `assume_valid`, then this should
+    /// return `Ok` if and only if the underlying data is actually valid.
     pub fn revalidate(&self) -> Result<&Self, Rule::Error> {
         Rule::validate_str(self)?;
         Ok(self)
+    }
+
+    /// Try to change the rule.
+    pub fn try_change_rules<Rule2: ValidateString>(&self) -> Result<&VStr<Rule2>, Rule2::Error> {
+        VStr::<Rule2>::try_validate(self)
+    }
+
+    /// Try to change the rule automatically.
+    pub fn change_rules<Rule2: ValidateString>(&self) -> &VStr<Rule2>
+    where
+        Rule: Into<Rule2>,
+    {
+        VStr::<Rule2>::assume_valid(&self.inner)
+    }
+
+    /// Erase the rules.
+    pub fn erase_rules(&self) -> &VStr<ValidateAll> {
+        VStr::<ValidateAll>::assume_valid(&self.inner)
     }
 }
 
@@ -167,6 +209,7 @@ impl<Rule: ValidateString> AsRef<str> for VStr<Rule> {
 /// assert_eq!(vv, "hello world");
 /// ```
 pub trait StrExt<'a> {
+    /// Validate a string slice.
     fn vstr<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error>;
 }
 
@@ -276,30 +319,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn it_works() {
-        let good = VStr::<NonEmpty>::try_validate("Hello, world!");
-        assert!(good.is_ok());
-
-        let bad = VStr::<NonEmpty>::try_validate("");
-        assert!(bad.is_err());
-    }
-
-    #[test]
-    fn ascii_only_works() {
-        let input = "is this good?";
-        let good: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
-        assert!(good.is_ok());
-
-        let input = "is this good? 🤔";
-        let bad: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
-        assert!(bad.is_err());
-
-        let input = "";
-        let good: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
-        assert!(good.is_ok());
-    }
-
+    /// Both `NonEmpty` and `AsciiOnly`.
     struct CompoundNEAO;
 
     impl ValidateString for CompoundNEAO {
@@ -312,19 +332,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compound_works() {
-        let input = "Hello, world!";
-        let good: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
-        assert!(good.is_ok());
+    impl From<CompoundNEAO> for NonEmpty {
+        fn from(_: CompoundNEAO) -> Self {
+            NonEmpty
+        }
+    }
 
-        let input = "";
-        let bad: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
-        assert!(bad.is_err());
-
-        let input = "Hello, world! 🤔";
-        let bad: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
-        assert!(bad.is_err());
+    impl From<CompoundNEAO> for AsciiOnly {
+        fn from(_: CompoundNEAO) -> Self {
+            AsciiOnly
+        }
     }
 
     /// https://html.spec.whatwg.org/multipage/input.html#valid-e-mail-address
@@ -350,6 +367,45 @@ mod tests {
                 Err(())
             }
         }
+    }
+
+    #[test]
+    fn it_works() {
+        let good = VStr::<NonEmpty>::try_validate("Hello, world!");
+        assert!(good.is_ok());
+
+        let bad = VStr::<NonEmpty>::try_validate("");
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn ascii_only_works() {
+        let input = "is this good?";
+        let good: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
+        assert!(good.is_ok());
+
+        let input = "is this good? 🤔";
+        let bad: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
+        assert!(bad.is_err());
+
+        let input = "";
+        let good: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
+        assert!(good.is_ok());
+    }
+
+    #[test]
+    fn compound_works() {
+        let input = "Hello, world!";
+        let good: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
+        assert!(good.is_ok());
+
+        let input = "";
+        let bad: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
+        assert!(bad.is_err());
+
+        let input = "Hello, world! 🤔";
+        let bad: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
+        assert!(bad.is_err());
     }
 
     #[test]
@@ -415,5 +471,78 @@ mod tests {
         let em3 = "b@example.com".vstr::<Email>().unwrap();
         let (h1, h2) = hget!(em1, em3);
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn arc_works() {
+        let v1 = "a".vstr::<NonEmpty>().unwrap();
+        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let s1 = "c";
+
+        let a1 = Arc::new(v1);
+        let a2 = Arc::new(v2);
+        let a3 = Arc::new(s1);
+
+        assert!(*a1 < *a2);
+        assert!(*a2 < *a3);
+    }
+
+    #[test]
+    fn rc_works() {
+        let v1 = "a".vstr::<NonEmpty>().unwrap();
+        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let s1 = "c";
+
+        let a1 = Rc::new(v1);
+        let a2 = Rc::new(v2);
+        let a3 = Rc::new(s1);
+
+        assert!(*a1 < *a2);
+        assert!(*a2 < *a3);
+    }
+
+    #[test]
+    fn box_works() {
+        let v1 = "a".vstr::<NonEmpty>().unwrap();
+        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let s1 = "c";
+
+        let a1 = Box::new(v1);
+        let a2 = Box::new(v2);
+        let a3 = Box::new(s1);
+
+        assert!(*a1 < *a2);
+        assert!(*a2 < *a3);
+    }
+
+    #[test]
+    fn box_swapping() {
+        let v1 = "a".vstr::<NonEmpty>().unwrap();
+        let v2 = "b".vstr::<NonEmpty>().unwrap();
+
+        let mut a1 = Box::new(v1);
+        let mut a2 = Box::new(v2);
+
+        std::mem::swap(&mut a1, &mut a2);
+
+        assert_eq!(*a1, "b");
+        assert_eq!(*a2, "a");
+    }
+
+    #[test]
+    fn test_change_rules() {
+        let v1 = "a".vstr::<NonEmpty>().unwrap();
+        assert!(v1.try_change_rules::<AsciiOnly>().is_ok());
+
+        let v2 = "a".vstr::<AsciiOnly>().unwrap();
+        assert!(v2.try_change_rules::<NonEmpty>().is_ok());
+
+        let v3 = "".vstr::<AsciiOnly>().unwrap();
+        assert!(v3.try_change_rules::<NonEmpty>().is_err());
+
+        // Can't really "test" this, just showing it here.
+        let v4 = "a".vstr::<CompoundNEAO>().unwrap();
+        assert!(v4.change_rules::<NonEmpty>() == "a");
+        assert!(v4.erase_rules() == "a");
     }
 }
