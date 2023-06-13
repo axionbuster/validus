@@ -157,7 +157,7 @@ pub trait ValidateString: Send + Sync + Unpin {
 }
 
 /// A special implementation that validates everything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ValidateAll;
 
 /// A special implementation that validates everything.
@@ -279,6 +279,7 @@ impl<Rule: ValidateString> VStr<Later<Rule>> {
 /// assert!(v2.is_err());
 /// ```
 #[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Later<R: ValidateString> {
     _rule: PhantomData<R>,
 }

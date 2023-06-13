@@ -2,6 +2,11 @@
 name = "validus"
 version = "0.1.0"
 edition = "2021"
+authors = ["axionbuster"]
+description = "A string validation library"
+license = "MIT"
+keywords = ["validation", "string"]
+categories = ["validation"]
 
 [package.metadata."docs.rs"]
 all-features = true

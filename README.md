@@ -28,6 +28,17 @@ rule's associated `Error` type will be returned.
 ```rust
 // Illustration: a struct with a validated email field.
 
+#[cfg(feature = "serde")] {
+
+use validus::prelude::*;
+use validus::cheap_rule;
+use serde::Deserialize;
+
+// This rule is very generous. It accepts any string that
+// contains an at-symbol.
+struct EmailRule;
+cheap_rule!(EmailRule, msg = "no at-symbol", |s: &str| s.contains('@'));
+
 #[derive(Deserialize)]
 pub struct User {
     pub email: Box<vstr<EmailRule>>,
@@ -41,6 +52,8 @@ let input = r#"{"email": "hi@example.com"}"#;
 let result = serde_json::from_str::<User>(input);
 assert!(result.is_ok());
 assert!(result.unwrap().email.as_str() == "hi@example.com");
+
+}
 ```
 
 You are also given the power to override the underlying
@@ -52,6 +65,9 @@ method that can be used to establish the validity of a
 
 ```rust
 // Illustration: overriding the validation mechanism.
+
+use validus::prelude::*;
+use validus::easy_rule;
 
 struct No;
 easy_rule!(No, err = &'static str, |s: &str| Err("i won't accept anything"));
@@ -84,20 +100,18 @@ between any two rules.)
 // Illustration: declaring implication.
 // Implication means: "Whenever [rule] A says good, so does B."
 
+use validus::prelude::*;
+use validus::cheap_rule;
+
 // Less generous
 struct A;
-easy_rule!(A, err = &'static str, |s: &str| s.contains("wow")
-.then(|| ()).ok_or("no wow"));
+cheap_rule!(A, msg = "no wow", |s: &str| s.contains("wow"));
 
 // More generous: includes all strings that A accepts and
 // perhaps more.
 struct B;
-easy_rule!(B, err = &'static str, |s: &str| {
-    if s.contains("wow") || s.contains("bad") {
-        Ok(())
-    } else {
-        Err("no wow or bad")
-    }
+cheap_rule!(B, msg = "neither wow nor bad found", |s: &str| {
+    s.contains("wow") || s.contains("bad")
 });
 
 // Assert that A implies B.
@@ -132,7 +146,7 @@ a dedicated method called `erase_rules` just for that.
 From `ValidateAll`, you can use `try_change_rules` to
 convert to any other rule.
 
-## Example (extracted from `lib.rs`)
+## `serde` with validation
 
 In this example, a string representing email is validated upon
 deserialization. If it passes the validation, it is wrapped in a
@@ -141,6 +155,8 @@ deserialization. If it passes the validation, it is wrapped in a
 (This example requires the `serde` feature to be enabled.)
 
 ```rust
+#[cfg(feature = "serde")] {
+
 use validus::prelude::*;
 use validus::easy_rule;
 
@@ -177,4 +193,12 @@ let badinput = "my_email";
 assert!(badinput.validate::<EmailRule>().is_err());
 let s = serde_json::to_string(badinput).unwrap();
 assert!(serde_json::from_str::<Box<Email>>(&s).is_err());
+
+}
 ```
+
+## ... and, more!
+
+- `Later<R>` type wraps around a rule (`R`) and delays the validation
+until `vstr.try_validate_now()` is called. This is useful when you want to
+validate a string slice only when it is actually used. See: [`Later`](crate::vstr::Later).
