@@ -237,6 +237,11 @@ impl<Rule: ValidateString> VStr<Rule> {
     pub fn erase_rules(&self) -> &VStr<ValidateAll> {
         VStr::<ValidateAll>::assume_valid(&self.inner)
     }
+
+    /// Get the underlying string slice.
+    pub fn as_str(&self) -> &str {
+        &self.inner
+    }
 }
 
 impl<Rule: ValidateString> From<&VStr<Rule>> for Arc<str> {
@@ -752,6 +757,75 @@ mod tests {
         let v4 = "a".validate::<CompoundNEAO>().unwrap();
         assert!(v4.change_rules::<NonEmpty>() == "a");
         assert!(v4.erase_rules() == "a");
+    }
+
+    #[test]
+    fn test_misc1() {
+        struct No;
+        easy_rule!(No, err = &'static str, |_: &str| Err("i won't accept anything"));
+
+        let s = "hello";
+        let v: &vstr<No> = vstr::assume_valid(s);
+
+        // Yup, it works.
+        assert_eq!(v, "hello");
+
+        // But it's not valid. Let's test that.
+        assert!(v.revalidate().is_err());
+    }
+
+    #[test]
+    fn test_misc2() {
+        // Less generous
+        struct A;
+        easy_rule!(A, err = &'static str, |s: &str| s.contains("wow")
+.then(|| ()).ok_or("no wow"));
+
+        // More generous: includes all strings that A accepts and
+        // perhaps more.
+        struct B;
+        easy_rule!(B, err = &'static str, |s: &str| {
+            if s.contains("wow") || s.contains("bad") {
+                Ok(())
+            } else {
+                Err("no wow or bad")
+            }
+        });
+
+        // Assert that A implies B.
+        impl From<A> for B {
+            fn from(_: A) -> Self {
+                B
+            }
+        }
+
+        // The declaration of implication unlocks the `change_rules`
+        // method that converts a reference to `vstr<A>` to a reference
+        // to `vstr<B>` infallibly.
+
+        let good = "wow bad";
+        let a: &vstr<A> = vstr::assume_valid(good); // we know it works, so.
+        let _: &vstr<B> = a.change_rules(); // infallible. see, no Result or unwrap().
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_misc3() {
+        type EmailRule = Email;
+
+        #[derive(Deserialize)]
+        struct User {
+            email: Box<vstr<EmailRule>>,
+        }
+
+        let input = r#"{"email": "notgood"}"#;
+        let result = serde_json::from_str::<User>(input);
+        assert!(result.is_err());
+
+        let input = r#"{"email": "hi@example.com"}"#;
+        let result = serde_json::from_str::<User>(input);
+        assert!(result.is_ok());
+        assert!(result.unwrap().email.as_str() == "hi@example.com");
     }
 
     #[cfg(feature = "serde")]
