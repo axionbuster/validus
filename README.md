@@ -1,7 +1,5 @@
 # `validus` --- validated string slices
 
-(See `lib.rs` for more documentation)
-
 This library provides a `VStr<Rule>` type, which is an un-sized
 wrapper around regular string slices (`str`). Since it is un-sized,
 it can be used as a slice, but it cannot be used as a value. Instead,
