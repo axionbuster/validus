@@ -6,15 +6,49 @@ use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem::transmute,
-    ops::Deref,
     rc::Rc,
     sync::Arc,
 };
 
-/// A validated string slice with a given rule.
+/// A validated string slice with a given rule or label.
 ///
-/// The rule is any function-like ZST that can be
-/// called on any `str`-slice to validate it.
+/// The validation is advisory; the type does not make any
+/// more guarantees than a `str` slice. In fact, the
+/// [`VStr::assume_valid`] method can be used to create
+/// a [`VStr`] from a `str` without validation.
+///
+/// That being said, in general, the [`VStr::try_validate`]
+/// method should be used to create a [`VStr`] from a `str`.
+///
+/// The `Rule` is any function-like ZST that can be
+/// called on any `str`-slice to validate it. See: [`ValidateString`].
+///
+/// # Example
+///
+/// ```
+/// // How to use `VStr`:
+/// // 1. Create your rule (that implements `ValidateString`).
+/// // 2. Mention your rule in the type signature of `VStr`.
+///
+/// use validus::prelude::{ValidateString, VStr};
+///
+/// fn my_validate(s: &str) -> bool { true }
+///
+/// // 1. Create your rule.
+/// struct MyRule;
+/// impl ValidateString for MyRule {
+///     type Error = ();
+///
+///     fn validate_str(s: &str) -> Result<(), Self::Error> {
+///         my_validate(s).then(|| ()).ok_or(())
+///     }
+/// }
+///
+/// // 2. Mention your rule in the type signature of `VStr`.
+/// // Now, you have a `VStr<MyRule>`, a string slice validated according
+/// // to `MyRule`.
+/// let vstr: &VStr<MyRule> = VStr::try_validate("hello").unwrap();
+/// ```
 #[repr(transparent)]
 pub struct VStr<Rule: ValidateString> {
     /// The rule that validates the string slice.
@@ -30,17 +64,85 @@ pub struct VStr<Rule: ValidateString> {
 #[allow(dead_code)]
 pub type vstr<Rule> = VStr<Rule>;
 
-/// Trait for validating a string slice.
+/// Validate a string slice.
+///
+/// A type (preferably a ZST) that implements this trait
+/// has a function `validate_str` that can be called on
+/// any `str`-slice to validate it, according to the rules
+/// that the type claims to enforce.
+///
+/// There's also the special implementations:
+/// - [`ValidateAll`]: that validates everything, and
+/// - `()`: that validates nothing.
+///
+/// # Example
+///
+/// In this example, the use of a regular expression to validate
+/// a simple email address is shown.
+///
+/// Here, I will use a simplified email scheme that just checks
+/// whether there are characters before and after an at-sign (`@`)
+/// all throughout the string slice.
+///
+/// ```
+/// use std::sync::OnceLock;
+///
+/// use regex::Regex;
+/// use validus::prelude::ValidateString;
+///
+/// const REGEX: &str = r"^.+@.+$";
+///
+/// static RE_EMAIL: OnceLock<Regex> = OnceLock::new();
+///
+/// // This is my rule.
+/// struct Email;
+///
+/// // And, this is how I implement it.
+/// impl ValidateString for Email {
+///     type Error = ();
+///
+///     fn validate_str(s: &str) -> Result<(), Self::Error> {
+///         // I use a `OnceLock` to lazily compile the regex.
+///         let re = RE_EMAIL.get_or_init(|| Regex::new(REGEX).unwrap());
+///         // ... then, `is_match` to check whether the string slice
+///         // matches the regex.
+///         re.is_match(s).then(|| ()).ok_or(())
+///     }
+/// }
+///
+/// // Now, I can call `validate_str` on a string slice.
+/// assert!(Email::validate_str("hello@world").is_ok());
+///
+/// // Very well. Now, a counter-example.
+/// assert!(Email::validate_str("hello world").is_err());
+///
+/// // Note that, however, each implementation of `ValidateString`
+/// // is meant to be used by `VStr`.
+/// ```
 ///
 /// # About `Into`
 ///
-/// You can implement a hierarchy of rules by using `Into`.
+/// You can express: "If `RuleA` validates a string slice,
+/// then `RuleB` also validates the same string slice."
 ///
-/// If `RuleA: Into<RuleB>`, then `VStr<RuleA>` can be
-/// converted to `VStr<RuleB>` without error.
+/// Specifically, if `RuleA: Into<RuleB>`, then `VStr<RuleA>` can be
+/// converted to `VStr<RuleB>` without possibility of error.
 ///
-/// See [`self::VStr::change_rules`] for more information.
-pub trait ValidateString {
+/// See [`VStr::change_rules`] and [`VStr::erase_rules`] for more information.
+///
+/// (There's also [`VStr::try_change_rules`], which
+/// is a fallible version of [`VStr::change_rules`],
+/// that works for any pair of rules.)
+///
+/// ## `Into` is incomplete.
+///
+/// Idetally, all [`ValidateString`] implementations should
+/// implement `Into<ValidateAll>` and `From<()>` (here, `()` is
+/// a special rule that validates nothing).
+///
+/// However, I couldn't manage to do that, so you should do your best
+/// to implement `Into<ValidateAll>` and `From<()>` for your own rules.
+pub trait ValidateString: Send + Sync + Unpin {
     /// Explain why the string slice is invalid.
     ///
     /// (Transient errors are not allowed; all errors should
@@ -55,6 +157,7 @@ pub trait ValidateString {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValidateAll;
 
+/// A special implementation that validates everything.
 impl ValidateString for ValidateAll {
     type Error = Infallible;
 
@@ -84,7 +187,9 @@ impl<Rule: ValidateString> VStr<Rule> {
     /// (This might be useful when validation is expensive and
     /// the underlying data can be assumed to be valid.)
     pub fn assume_valid(s: &str) -> &Self {
-        // SAFETY: All guarantees of `str` follows.
+        // SAFETY: All guarantees of `str` apply.
+        // SAFETY: `VStr` makes no further guarantees beyond that of `str`.
+        // SAFETY: `VStr` has `#[repr(transparent)]`.
         unsafe { transmute(s) }
     }
 
@@ -95,16 +200,21 @@ impl<Rule: ValidateString> VStr<Rule> {
     /// - If `self` was created with `assume_valid`, then this should
     /// return `Ok` if and only if the underlying data is actually valid.
     pub fn revalidate(&self) -> Result<&Self, Rule::Error> {
-        Rule::validate_str(self)?;
+        Rule::validate_str(self.as_ref())?;
         Ok(self)
     }
 
     /// Try to change the rule.
+    ///
+    /// Also see: [`VStr::change_rules`], [`VStr::try_validate`].
     pub fn try_change_rules<Rule2: ValidateString>(&self) -> Result<&VStr<Rule2>, Rule2::Error> {
-        VStr::<Rule2>::try_validate(self)
+        VStr::<Rule2>::try_validate(self.as_ref())
     }
 
-    /// Try to change the rule automatically.
+    /// Try to change the rule without possibility of error whenever
+    /// `Rule: Into<Rule2>`.
+    ///
+    /// Also see: [`VStr::try_change_rules`], [`VStr::erase_rules`].
     pub fn change_rules<Rule2: ValidateString>(&self) -> &VStr<Rule2>
     where
         Rule: Into<Rule2>,
@@ -113,6 +223,14 @@ impl<Rule: ValidateString> VStr<Rule> {
     }
 
     /// Erase the rules.
+    ///
+    /// Also see: [`VStr::assume_valid`].
+    ///
+    /// ([`ValidateAll`] is a null rule that validates everything.)
+    ///
+    /// Note: no rule currently implements `Into<ValidateAll>` by default
+    /// due to a limitation in Rust's trait system (I cannot specify
+    /// a negation of a trait bound, namely `T: !ValidateAll`.)
     pub fn erase_rules(&self) -> &VStr<ValidateAll> {
         VStr::<ValidateAll>::assume_valid(&self.inner)
     }
@@ -169,11 +287,28 @@ impl<Rule: ValidateString> From<&VStr<Rule>> for Box<VStr<Rule>> {
     }
 }
 
-impl<Rule: ValidateString> Deref for VStr<Rule> {
-    type Target = str;
+impl<'a, Rule: ValidateString> TryFrom<&'a str> for &'a VStr<Rule> {
+    type Error = Rule::Error;
 
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        VStr::try_validate(s)
+    }
+}
+
+impl<'a, Rule: ValidateString> From<&'a VStr<Rule>> for &'a str {
+    fn from(vstr: &'a VStr<Rule>) -> Self {
+        &vstr.inner
+    }
+}
+
+// For some reason, I am unable to reproduce the implementation
+// for Rc and Arc. I suspect that `Box` is just special-cased
+// in the compiler (?).
+impl<Rule: ValidateString> TryFrom<String> for Box<VStr<Rule>> {
+    type Error = Rule::Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Ok(Box::from(s.validate::<Rule>()?))
     }
 }
 
@@ -183,7 +318,7 @@ impl<Rule: ValidateString> AsRef<str> for VStr<Rule> {
     }
 }
 
-/// Conveniently validate a string slice.
+/// Call `.validate()` on any `str`-slice to validate it.
 ///
 /// # Example
 ///
@@ -204,17 +339,17 @@ impl<Rule: ValidateString> AsRef<str> for VStr<Rule> {
 ///     }
 /// }
 ///
-/// // `StrExt` allows you to call `vstr` on any `str`-slice.
-/// let vv: &vstr<MyRule> = "hello world".vstr::<MyRule>().unwrap();
+/// // `StrExt` allows you to call `.validate` on any `str`-slice.
+/// let vv: &vstr<MyRule> = "hello world".validate::<MyRule>().unwrap();
 /// assert_eq!(vv, "hello world");
 /// ```
 pub trait StrExt<'a> {
     /// Validate a string slice.
-    fn vstr<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error>;
+    fn validate<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error>;
 }
 
 impl<'a> StrExt<'a> for &'a str {
-    fn vstr<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error> {
+    fn validate<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error> {
         VStr::<Rule>::try_validate(self)
     }
 }
@@ -320,6 +455,8 @@ mod tests {
     }
 
     /// Both `NonEmpty` and `AsciiOnly`.
+    ///
+    /// (Hence, `NE`-`AO`.)
     struct CompoundNEAO;
 
     impl ValidateString for CompoundNEAO {
@@ -332,12 +469,14 @@ mod tests {
         }
     }
 
+    // Declare implication.
     impl From<CompoundNEAO> for NonEmpty {
         fn from(_: CompoundNEAO) -> Self {
             NonEmpty
         }
     }
 
+    // Declare implication (again).
     impl From<CompoundNEAO> for AsciiOnly {
         fn from(_: CompoundNEAO) -> Self {
             AsciiOnly
@@ -430,16 +569,16 @@ mod tests {
 
     #[test]
     fn diff_rule_still_eq() {
-        let rule1 = "wow".vstr::<NonEmpty>().unwrap();
-        let rule2 = "wow".vstr::<AsciiOnly>().unwrap();
+        let rule1 = "wow".validate::<NonEmpty>().unwrap();
+        let rule2 = "wow".validate::<AsciiOnly>().unwrap();
 
         assert_eq!(rule1, rule2);
     }
 
     #[test]
     fn order_mixed() {
-        let v1 = "a".vstr::<NonEmpty>().unwrap();
-        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let v1 = "a".validate::<NonEmpty>().unwrap();
+        let v2 = "b".validate::<AsciiOnly>().unwrap();
         let s1 = "c";
 
         assert!(v1 < v2);
@@ -458,8 +597,8 @@ mod tests {
             }};
         }
 
-        let em1 = "a@example.com".vstr::<Email>().unwrap();
-        let em2 = "a@example.com".vstr::<NonEmpty>().unwrap();
+        let em1 = "a@example.com".validate::<Email>().unwrap();
+        let em2 = "a@example.com".validate::<NonEmpty>().unwrap();
 
         let (h1, h2) = hget!(em1, em2);
         assert_eq!(h1, h2);
@@ -468,15 +607,15 @@ mod tests {
         let (h1, h2) = hget!(em1, st1);
         assert_eq!(h1, h2);
 
-        let em3 = "b@example.com".vstr::<Email>().unwrap();
+        let em3 = "b@example.com".validate::<Email>().unwrap();
         let (h1, h2) = hget!(em1, em3);
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn arc_works() {
-        let v1 = "a".vstr::<NonEmpty>().unwrap();
-        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let v1 = "a".validate::<NonEmpty>().unwrap();
+        let v2 = "b".validate::<AsciiOnly>().unwrap();
         let s1 = "c";
 
         let a1 = Arc::new(v1);
@@ -489,8 +628,8 @@ mod tests {
 
     #[test]
     fn rc_works() {
-        let v1 = "a".vstr::<NonEmpty>().unwrap();
-        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let v1 = "a".validate::<NonEmpty>().unwrap();
+        let v2 = "b".validate::<AsciiOnly>().unwrap();
         let s1 = "c";
 
         let a1 = Rc::new(v1);
@@ -503,8 +642,8 @@ mod tests {
 
     #[test]
     fn box_works() {
-        let v1 = "a".vstr::<NonEmpty>().unwrap();
-        let v2 = "b".vstr::<AsciiOnly>().unwrap();
+        let v1 = "a".validate::<NonEmpty>().unwrap();
+        let v2 = "b".validate::<AsciiOnly>().unwrap();
         let s1 = "c";
 
         let a1 = Box::new(v1);
@@ -517,8 +656,8 @@ mod tests {
 
     #[test]
     fn box_swapping() {
-        let v1 = "a".vstr::<NonEmpty>().unwrap();
-        let v2 = "b".vstr::<NonEmpty>().unwrap();
+        let v1 = "a".validate::<NonEmpty>().unwrap();
+        let v2 = "b".validate::<NonEmpty>().unwrap();
 
         let mut a1 = Box::new(v1);
         let mut a2 = Box::new(v2);
@@ -531,17 +670,17 @@ mod tests {
 
     #[test]
     fn test_change_rules() {
-        let v1 = "a".vstr::<NonEmpty>().unwrap();
+        let v1 = "a".validate::<NonEmpty>().unwrap();
         assert!(v1.try_change_rules::<AsciiOnly>().is_ok());
 
-        let v2 = "a".vstr::<AsciiOnly>().unwrap();
+        let v2 = "a".validate::<AsciiOnly>().unwrap();
         assert!(v2.try_change_rules::<NonEmpty>().is_ok());
 
-        let v3 = "".vstr::<AsciiOnly>().unwrap();
+        let v3 = "".validate::<AsciiOnly>().unwrap();
         assert!(v3.try_change_rules::<NonEmpty>().is_err());
 
         // Can't really "test" this, just showing it here.
-        let v4 = "a".vstr::<CompoundNEAO>().unwrap();
+        let v4 = "a".validate::<CompoundNEAO>().unwrap();
         assert!(v4.change_rules::<NonEmpty>() == "a");
         assert!(v4.erase_rules() == "a");
     }
