@@ -10,6 +10,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 /// A validated string slice with a given rule or label.
 ///
 /// The validation is advisory; the type does not make any
@@ -318,6 +321,37 @@ impl<Rule: ValidateString> AsRef<str> for VStr<Rule> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<Rule: ValidateString> Serialize for VStr<Rule> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.inner.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de: 'a, 'a, Rule: ValidateString> Deserialize<'de> for &'a VStr<Rule>
+where
+    Rule::Error: Display,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = <&str>::deserialize(deserializer)?;
+        let s = s.validate::<Rule>().map_err(serde::de::Error::custom)?;
+        Ok(s)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, Rule: ValidateString> Deserialize<'de> for Box<VStr<Rule>>
+where
+    Rule::Error: Display,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = <String>::deserialize(deserializer)?;
+        let s = s.validate::<Rule>().map_err(serde::de::Error::custom)?;
+        Ok(Box::from(s))
+    }
+}
+
 /// Call `.validate()` on any `str`-slice to validate it.
 ///
 /// # Example
@@ -416,40 +450,75 @@ impl<Rule: ValidateString> Hash for VStr<Rule> {
     }
 }
 
+/// Promote a function into a rule with a given type name.
+///
+/// The closure that returns a `Result` is the validation function.
+///
+/// It will be used to implement [`ValidateString`] for the rule.
+///
+/// # Example
+///
+/// ```
+/// use validus::vstr::{vstr, ValidateString, StrExt};
+/// use validus::easy_rule;
+///
+/// // Declare my rule
+/// struct MyRule;
+///
+/// // Implement `ValidateString` for my rule.
+/// easy_rule!(MyRule, err = &'static str, |s: &str| {
+///     (s.len() > 5).then(|| ()).ok_or("string is too short")
+/// });
+///
+/// // `StrExt` allows you to call `.validate` on any `str`-slice.
+/// let vv: &vstr<MyRule> = "hello world".validate::<MyRule>().unwrap();
+/// assert_eq!(vv, "hello world");
+/// ```
+#[macro_export]
+macro_rules! easy_rule {
+    ($name:ident, err = $err:ty, $func:expr) => {
+        impl ValidateString for $name {
+            type Error = $err;
+
+            fn validate_str(s: &str) -> Result<(), Self::Error> {
+                $func(s)
+            }
+        }
+    };
+}
+
 // TODO: I can't decide what the owned type should be.
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::{ops::Not, sync::OnceLock};
 
     use regex::Regex;
+    use thiserror::Error;
+
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
 
     use super::*;
 
+    /// A rule that only checks if the string is non-empty.
     struct NonEmpty;
 
-    impl ValidateString for NonEmpty {
-        type Error = ();
-
-        fn validate_str(s: &str) -> Result<(), Self::Error> {
-            if s.is_empty() {
-                Err(())
-            } else {
-                Ok(())
-            }
-        }
-    }
+    easy_rule!(NonEmpty, err = &'static str, |s: &str| {
+        s.is_empty().not().then(|| ()).ok_or("empty")
+    });
 
     struct AsciiOnly;
 
+    // A bit like a "proper" implementation, not using `easy_rule!`.
     impl ValidateString for AsciiOnly {
-        type Error = ();
+        type Error = &'static str;
 
         fn validate_str(s: &str) -> Result<(), Self::Error> {
             if s.is_ascii() {
                 Ok(())
             } else {
-                Err(())
+                Err("not ascii")
             }
         }
     }
@@ -459,15 +528,11 @@ mod tests {
     /// (Hence, `NE`-`AO`.)
     struct CompoundNEAO;
 
-    impl ValidateString for CompoundNEAO {
-        type Error = ();
-
-        fn validate_str(s: &str) -> Result<(), Self::Error> {
-            NonEmpty::validate_str(s)?;
-            AsciiOnly::validate_str(s)?;
-            Ok(())
-        }
-    }
+    easy_rule!(CompoundNEAO, err = &'static str, |s: &str| {
+        NonEmpty::validate_str(s)?;
+        AsciiOnly::validate_str(s)?;
+        Ok(())
+    });
 
     // Declare implication.
     impl From<CompoundNEAO> for NonEmpty {
@@ -494,19 +559,21 @@ mod tests {
         RE_EMAIL.get_or_init(|| Regex::new(EMAIL_HTML5).unwrap())
     }
 
+    /// Trying to get fancy with error types.
+    #[derive(Debug, Error)]
+    enum EmailError {
+        /// The email is invalid.
+        ///
+        /// I'm telling you!
+        #[error("invalid email")]
+        Invalid,
+    }
+
     struct Email;
 
-    impl ValidateString for Email {
-        type Error = ();
-
-        fn validate_str(s: &str) -> Result<(), Self::Error> {
-            if email().is_match(s) {
-                Ok(())
-            } else {
-                Err(())
-            }
-        }
-    }
+    easy_rule!(Email, err = EmailError, |s: &str| {
+        email().is_match(s).then(|| ()).ok_or(EmailError::Invalid)
+    });
 
     #[test]
     fn it_works() {
@@ -520,41 +587,41 @@ mod tests {
     #[test]
     fn ascii_only_works() {
         let input = "is this good?";
-        let good: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
+        let good: Result<&vstr<AsciiOnly>, _> = VStr::try_validate(input);
         assert!(good.is_ok());
 
         let input = "is this good? 🤔";
-        let bad: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
+        let bad: Result<&vstr<AsciiOnly>, _> = VStr::try_validate(input);
         assert!(bad.is_err());
 
         let input = "";
-        let good: Result<&vstr<AsciiOnly>, ()> = VStr::try_validate(input);
+        let good: Result<&vstr<AsciiOnly>, _> = VStr::try_validate(input);
         assert!(good.is_ok());
     }
 
     #[test]
     fn compound_works() {
         let input = "Hello, world!";
-        let good: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
+        let good: Result<&vstr<CompoundNEAO>, _> = VStr::try_validate(input);
         assert!(good.is_ok());
 
         let input = "";
-        let bad: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
+        let bad: Result<&vstr<CompoundNEAO>, _> = VStr::try_validate(input);
         assert!(bad.is_err());
 
         let input = "Hello, world! 🤔";
-        let bad: Result<&vstr<CompoundNEAO>, ()> = VStr::try_validate(input);
+        let bad: Result<&vstr<CompoundNEAO>, _> = VStr::try_validate(input);
         assert!(bad.is_err());
     }
 
     #[test]
     fn email_works() {
         let input = "hana@example.com";
-        let good: Result<&vstr<Email>, ()> = VStr::try_validate(input);
+        let good: Result<&vstr<Email>, _> = VStr::try_validate(input);
         assert!(good.is_ok());
 
         let input = "wow";
-        let bad: Result<&vstr<Email>, ()> = VStr::try_validate(input);
+        let bad: Result<&vstr<Email>, _> = VStr::try_validate(input);
         assert!(bad.is_err());
     }
 
@@ -683,5 +750,72 @@ mod tests {
         let v4 = "a".validate::<CompoundNEAO>().unwrap();
         assert!(v4.change_rules::<NonEmpty>() == "a");
         assert!(v4.erase_rules() == "a");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_se() {
+        let v1 = "a".validate::<NonEmpty>().unwrap();
+        let v2 = "b".validate::<AsciiOnly>().unwrap();
+
+        let v1s = serde_json::to_string(&v1).unwrap();
+        let v2s = serde_json::to_string(&v2).unwrap();
+
+        let v1d: String = serde_json::from_str(&v1s).unwrap();
+        let v2d: String = serde_json::from_str(&v2s).unwrap();
+
+        assert_eq!(*v1, *v1d);
+        assert_eq!(*v2, *v2d);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_de_reject() {
+        let input = "notemail";
+        let s = serde_json::to_string(input).unwrap();
+        let x: Result<&vstr<Email>, _> = serde_json::from_str(&s);
+        assert!(x.is_err());
+
+        let x: Result<Box<vstr<Email>>, _> = serde_json::from_str(&s);
+        assert!(x.is_err());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_de_accept() {
+        let input = "a";
+        let s = serde_json::to_string(input).unwrap();
+        let x: Result<&vstr<NonEmpty>, _> = serde_json::from_str(&s);
+        assert!(x.is_ok());
+        assert_eq!(x.unwrap().as_ref(), "a");
+
+        let x: Result<Box<vstr<NonEmpty>>, _> = serde_json::from_str(&s);
+        assert!(x.is_ok());
+        assert_eq!(x.unwrap().as_ref(), "a");
+    }
+
+    /// A hypothetical user.
+    #[cfg(feature = "serde")]
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct User {
+        // NOTE: If you enable the `rc` feature on `serde`,
+        // you can also use such smart pointers as `Rc`, `Arc`, etc.
+        // Here, I only use `Box` for simplicity.
+        name: Box<vstr<NonEmpty>>,
+        email: Box<vstr<Email>>,
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde_user() {
+        let user = User {
+            name: Box::from("John".validate().unwrap()),
+            email: Box::from("appleseed@example.com".validate().unwrap()),
+        };
+
+        let s = serde_json::to_string(&user).unwrap();
+        let user2: User = serde_json::from_str(&s).unwrap();
+
+        assert_eq!(user, user2);
     }
 }
