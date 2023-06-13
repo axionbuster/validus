@@ -479,7 +479,7 @@ impl<Rule: ValidateString> Hash for VStr<Rule> {
 #[macro_export]
 macro_rules! easy_rule {
     ($name:ident, err = $err:ty, $func:expr) => {
-        impl ValidateString for $name {
+        impl $crate::vstr::ValidateString for $name {
             type Error = $err;
 
             fn validate_str(s: &str) -> Result<(), Self::Error> {
