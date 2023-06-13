@@ -352,6 +352,8 @@ where
     }
 }
 
+// TODO: Ser/de Rc, Arc, etc.
+
 /// Call `.validate()` on any `str`-slice to validate it.
 ///
 /// # Example
