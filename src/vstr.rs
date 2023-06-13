@@ -244,6 +244,61 @@ impl<Rule: ValidateString> VStr<Rule> {
     }
 }
 
+impl<Rule: ValidateString> VStr<Later<Rule>> {
+    /// Try to validate it now.
+    ///
+    /// See [`VStr::try_validate`] for more information and examples.
+    pub fn try_validate_now(&self) -> Result<&VStr<Rule>, Rule::Error> {
+        self.as_ref().validate()
+    }
+}
+
+/// Accept now, validate later.
+///
+/// This wrapper accepts all strings, but leaves behind
+/// a rule that should be applied later.
+///
+/// To lower a `vstr<Later<Rule>>` to `vstr<Rule>`, use
+/// [`VStr::try_validate_now`].
+///
+/// # Example
+///
+/// ```
+/// use validus::prelude::*;
+/// use validus::easy_rule;
+///
+/// struct Email;
+/// easy_rule!(Email, err = &'static str, |s: &str| s.contains('@').then(|| ()).ok_or("no @"));
+///
+/// let v1: &vstr<Later<Email>> = "hi@example.com".validate::<Later<Email>>().unwrap();
+/// let v1: Result<&vstr<Email>, _> = v1.try_validate_now();
+/// assert!(v1.is_ok());
+///
+/// let v2 = "notgood".validate::<Later<Email>>().unwrap();
+/// let v2 = v2.try_validate_now();
+/// assert!(v2.is_err());
+/// ```
+#[repr(transparent)]
+pub struct Later<R: ValidateString> {
+    _rule: PhantomData<R>,
+}
+
+impl<R: ValidateString> ValidateString for Later<R> {
+    type Error = Infallible;
+
+    fn validate_str(_: &str) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+// For the other way, namely Later<R> -> ValidateAll,
+// use `VStr::erase_rules`.
+impl<R: ValidateString> From<ValidateAll> for Later<R> {
+    fn from(_: ValidateAll) -> Self {
+        Later { _rule: PhantomData }
+    }
+}
+
 impl<Rule: ValidateString> From<&VStr<Rule>> for Arc<str> {
     fn from(vstr: &VStr<Rule>) -> Self {
         Arc::from(&vstr.inner)
@@ -489,6 +544,44 @@ macro_rules! easy_rule {
 
             fn validate_str(s: &str) -> Result<(), Self::Error> {
                 $func(s)
+            }
+        }
+    };
+}
+
+/// Promote a function into a rule with a given type name.
+///
+/// The closure that returns a `bool` is the validation function.
+///
+/// If the validation fails, the error message of your choice will be returned.
+///
+/// The error message is a `&'static str`.
+///
+/// # Example
+///
+/// ```
+/// use validus::prelude::*;
+/// use validus::cheap_rule;
+///
+/// struct Email;
+/// cheap_rule!(Email, msg = "invalid email", |s: &str| {
+///     s.contains('@')
+/// });
+///
+/// let vv: &vstr<Email> = "hello@world".validate::<Email>().unwrap();
+/// ```
+#[macro_export]
+macro_rules! cheap_rule {
+    ($name:ident, msg = $msg:expr, $func:expr) => {
+        impl $crate::vstr::ValidateString for $name {
+            type Error = &'static str;
+
+            fn validate_str(s: &str) -> Result<(), Self::Error> {
+                if $func(s) {
+                    Ok(())
+                } else {
+                    Err($msg)
+                }
             }
         }
     };
@@ -806,6 +899,17 @@ mod tests {
         let good = "wow bad";
         let a: &vstr<A> = vstr::assume_valid(good); // we know it works, so.
         let _: &vstr<B> = a.change_rules(); // infallible. see, no Result or unwrap().
+    }
+
+    #[test]
+    fn test_later1() {
+        let v1 = "hi@example.com".validate::<Later<Email>>().unwrap();
+        let v1 = v1.try_validate_now();
+        assert!(v1.is_ok());
+
+        let v2 = "notgood".validate::<Later<Email>>().unwrap();
+        let v2 = v2.try_validate_now();
+        assert!(v2.is_err());
     }
 
     #[cfg(feature = "serde")]
