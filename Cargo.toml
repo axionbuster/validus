@@ -20,7 +20,7 @@ thiserror = { version = "1.0.40", optional = true }
 [features]
 default = ["serde", "ext"]
 ext = ["thiserror"]
-cow = []
+cow = [] # experimental
 
 [dev-dependencies]
 regex = "1.8.4"

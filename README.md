@@ -349,7 +349,7 @@ assert!(strict.is_err()); // It didn't make it (it was a bad email address.)
 - Check out some of the prepared validation rules in the module [`vstrext`][crate::vstrext].
 The module should already have been imported in the prelude module
 (it's feature-gated by `ext`, which is enabled by default.)
-- The experimental `cow` feature introduces a new type, [`VCow`](crate::vstr::VCow),
+- The experimental `cow` feature introduces a new type, `VCow`,
 which is like `Cow<str>`, but with optional validation.
 
 ## Features

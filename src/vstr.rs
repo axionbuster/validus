@@ -929,7 +929,7 @@ impl<'a, R: ValidateString> VCow<'a, R> {
     /// Mark validity
     ///
     /// - `true`: certain
-    /// - `false: uncertain, always correct
+    /// - `false`: uncertain, always correct
     pub fn into_mark_surely_valid(this: Self, surely_valid: bool) -> Self {
         Self {
             surely_valid,
@@ -940,7 +940,7 @@ impl<'a, R: ValidateString> VCow<'a, R> {
     /// Mark it as valid.
     ///
     /// - `true`: certain
-    /// - `false: uncertain, always correct
+    /// - `false`: uncertain, always correct
     pub fn mark_surely_valid_mut(this: &mut Self, surely_valid: bool) {
         this.surely_valid = surely_valid;
     }
@@ -1250,6 +1250,43 @@ impl<'a, R: ValidateString> From<Cow<'a, vstr<R>>> for VCow<'a, R> {
         Self::from_cow_vstr(cow)
     }
 }
+
+impl<'a, R: ValidateString> From<VCow<'a, R>> for Cow<'a, str> {
+    fn from(cow: VCow<'a, R>) -> Self {
+        cow.cow
+    }
+}
+
+impl<'a: 'b, 'b, R: ValidateString> From<&'a VCow<'b, R>> for &'b str {
+    fn from(cow: &'a VCow<'b, R>) -> Self {
+        cow.as_str()
+    }
+}
+
+impl<'a: 'b, 'b, R: ValidateString> TryFrom<&'a VCow<'b, R>> for &'b vstr<R> {
+    type Error = R::Error;
+
+    fn try_from(cow: &'a VCow<'b, R>) -> Result<Self, Self::Error> {
+        match VCow::decide_valid(cow) {
+            Ok(()) => Ok(cow.opt_as_vstr().unwrap()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// TODO: ...
+// impl<'a, R: ValidateString> TryFrom<VCow<'a, R>> for Cow<'a, vstr<R>> {
+//     type Error = R::Error;
+
+//     fn try_from(cow: VCow<'a, R>) -> Result<Self, Self::Error> {
+//         match VCow::decide_valid(&cow) {
+//             Ok(()) => Ok(Cow::Borrowed(cow.opt_as_vstr().unwrap())),
+//             Err(e) => Err(e),
+//         }
+//     }
+// }
+
+// with_cow_feature!
 }
 
 #[cfg(test)]
