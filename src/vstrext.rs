@@ -17,7 +17,7 @@
 
 use std::{fmt::Display, marker::PhantomData, ops::Not};
 
-use crate::{easy_rule, vstr::*};
+use crate::{cheap_rule, easy_rule, vstr::*};
 
 use thiserror::Error;
 
@@ -237,25 +237,25 @@ pub struct BothError<L, R> {
 /// - [`EitherError`] (error type).
 ///
 /// # Example
-/// 
+///
 /// ```
 /// use validus::prelude::*;
-/// 
+///
 /// // Length limit and ASCII only.
 /// pub type UserNameRule = Conj<StringSizeRule<4, 12>, StringAsciiRule>;
-/// 
+///
 /// let bad1 = "123".validate::<UserNameRule>();
 /// assert!(bad1.is_err());
 /// assert!(bad1.unwrap_err().is_left()); // left = length limit
-/// 
+///
 /// let bad2 = "1234567890123".validate::<UserNameRule>();
 /// assert!(bad2.is_err());
 /// assert!(bad2.unwrap_err().is_left()); // left
-/// 
+///
 /// let bad3 = "wow 😎".validate::<UserNameRule>();
 /// assert!(bad3.is_err());
 /// assert!(bad3.unwrap_err().is_right()); // right = ASCII only
-/// 
+///
 /// let good = "1234".validate::<UserNameRule>();
 /// assert!(good.is_ok());
 /// assert_eq!(good.unwrap(), "1234");
@@ -275,30 +275,30 @@ pub struct Conj<L: ValidateString, R: ValidateString> {
 /// See also:
 /// - [`Conj`] (dual).
 /// - [`BothError`] (error type).
-/// 
+///
 /// # Example
-/// 
+///
 /// ```
 /// use validus::prelude::*;
-/// 
+///
 /// type Card1 = StringExactSizeRule<16>;
 /// type Card2 = StringExactSizeRule<7>;
-/// 
+///
 /// // Either card number is valid.
 /// pub type CardRule = Disj<Card1, Card2>;
-/// 
+///
 /// // 17 digits is too long for both rules.
 /// let bad1 = "12345678901234567".validate::<CardRule>();
 /// assert!(bad1.is_err());
-/// 
+///
 /// // 16 digits is valid for the first rule.
 /// let good1 = "1234567890123456".validate::<CardRule>();
 /// assert!(good1.is_ok());
-/// 
+///
 /// // 7 digits is valid for the second rule.
 /// let good2 = "1234567".validate::<CardRule>();
 /// assert!(good2.is_ok());
-/// 
+///
 /// // but 8 digits is not accepted by either.
 /// let bad2 = "12345678".validate::<CardRule>();
 /// assert!(bad2.is_err());
@@ -365,59 +365,43 @@ pub struct StringHasNonAsciiError;
 /// Require the string to not have any non-ASCII bytes.
 pub struct StringAsciiRule;
 
-easy_rule!(
-    StringAsciiRule,
-    err = StringHasNonAsciiError,
-    |s: &str| {
-        s.as_bytes()
-            .iter()
-            // this is fine. UTF-8 makes sure that ASCII
-            // codepoints are ASCII-compatible, and the
-            // set of ASCII codepoints and non-ASCII codepoints
-            // in the image of the UTF-8 representations
-            // are disjoint.
-            .all(|&b| b.is_ascii())
-            .then(|| ())
-            .ok_or(StringHasNonAsciiError)
-    }
-);
+easy_rule!(StringAsciiRule, err = StringHasNonAsciiError, |s: &str| {
+    s.as_bytes()
+        .iter()
+        // this is fine. UTF-8 makes sure that ASCII
+        // codepoints are ASCII-compatible, and the
+        // set of ASCII codepoints and non-ASCII codepoints
+        // in the image of the UTF-8 representations
+        // are disjoint.
+        .all(|&b| b.is_ascii())
+        .then(|| ())
+        .ok_or(StringHasNonAsciiError)
+});
 
 /// String had control characters.
-#[derive(Debug, Error)]
-#[error("string had control characters")]
 pub struct StringHasControlCharError;
 
 /// Require the string to not have any control characters.
 pub struct StringNoControlCharRule;
 
-easy_rule!(
+cheap_rule!(
     StringNoControlCharRule,
     err = StringHasControlCharError,
-    |s: &str| {
-        s.chars()
-            .all(|c| !c.is_control())
-            .then(|| ())
-            .ok_or(StringHasControlCharError)
-    }
+    msg = "string had control characters",
+    |s: &str| { s.chars().all(|c| !c.is_control()) }
 );
 
 /// String had whitespace characters.
-#[derive(Debug, Error)]
-#[error("string had whitespace characters")]
 pub struct StringHasWhitespaceError;
 
-/// Require the string to not have any whitespace characters.
+// Require the string to not have any whitespace characters.
 pub struct StringNoWhitespaceRule;
 
-easy_rule!(
+cheap_rule!(
     StringNoWhitespaceRule,
     err = StringHasWhitespaceError,
-    |s: &str| {
-        s.chars()
-            .all(|c| !c.is_whitespace())
-            .then(|| ())
-            .ok_or(StringHasWhitespaceError)
-    }
+    msg = "string had whitespace",
+    |s: &str| { s.chars().all(|c| !c.is_whitespace()) }
 );
 
 // We can go on forever... Let me take a break here.

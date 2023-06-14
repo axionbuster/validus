@@ -202,3 +202,11 @@ assert!(serde_json::from_str::<Box<Email>>(&s).is_err());
 - `Later<R>` type wraps around a rule (`R`) and delays the validation
 until `vstr.try_validate_now()` is called. This is useful when you want to
 validate a string slice only when it is actually used. See: [`Later`](crate::vstr::Later).
+- Check out the built-in extensions in the module [`vstrext`][crate::vstrext].
+The module should already have been imported in the prelude module
+(it's feature-gated by `ext`, which is enabled by default.)
+
+## Features
+
+- (default) `serde`: enables `serde` support.
+- (default) `ext`: enables built-in extensions.

@@ -125,26 +125,36 @@ pub type vstr<Rule> = VStr<Rule>;
 ///
 /// # About `Into`
 ///
-/// You can express: "If `RuleA` validates a string slice,
+/// Using `Into`, you can express: "If `RuleA` validates a string slice,
 /// then `RuleB` also validates the same string slice."
 ///
 /// Specifically, if `RuleA: Into<RuleB>`, then `VStr<RuleA>` can be
-/// converted to `VStr<RuleB>` without possibility of error.
+/// converted to `VStr<RuleB>` without the possibility of error
+/// using the [`VStr::change_rules`] method.
 ///
 /// See [`VStr::change_rules`] and [`VStr::erase_rules`] for more information.
 ///
 /// (There's also [`VStr::try_change_rules`], which
-/// is a fallible version of [`VStr::change_rules`],
+/// is a fallible version of [`VStr::change_rules`]
 /// that works for any pair of rules.)
 ///
-/// ## `Into` is incomplete.
+/// ## `Into` is incomplete
 ///
 /// Idetally, all [`ValidateString`] implementations should
-/// implement `Into<ValidateAll>` and `From<()>` (here, `()` is
-/// a special rule that validates nothing).
+/// implement `Into<ValidateAll>`.
 ///
-/// However, I couldn't manage to do that, so you should do your best
-/// to implement `Into<ValidateAll>` and `From<()>` for your own rules.
+/// However, this is not possible because of the orphan rule,
+/// so here's a workaround:
+///
+/// - To convert a `vstr<_>` to `vstr<ValidateAll>`, use
+///  [`VStr::erase_rules`].
+/// - Also, to convert a `vstr<()>` to `vstr<_>`, use
+///  [`VStr::try_change_rules`].
+///
+/// ## See also
+///
+/// - [`VStr`]
+/// - [`Later`] (deferred validation)
 pub trait ValidateString: Send + Sync + Unpin {
     /// Explain why the string slice is invalid.
     ///
@@ -207,17 +217,18 @@ impl<Rule: ValidateString> VStr<Rule> {
         Ok(self)
     }
 
-    /// Try to change the rule.
+    /// Try to change the rule, returning an error if the string slice
+    /// does not satisfy the new rule.
     ///
     /// Also see: [`VStr::change_rules`], [`VStr::try_validate`].
     pub fn try_change_rules<Rule2: ValidateString>(&self) -> Result<&VStr<Rule2>, Rule2::Error> {
         VStr::<Rule2>::try_validate(self.as_ref())
     }
 
-    /// Try to change the rule without possibility of error whenever
-    /// `Rule: Into<Rule2>`.
+    /// Try to change the rule infallibly whenever `Rule: Into<Rule2>`.
     ///
-    /// Also see: [`VStr::try_change_rules`], [`VStr::erase_rules`].
+    /// Also see: [`VStr::try_change_rules`], [`VStr::erase_rules`],
+    /// [`VStr::assume_valid`].
     pub fn change_rules<Rule2: ValidateString>(&self) -> &VStr<Rule2>
     where
         Rule: Into<Rule2>,
@@ -227,13 +238,11 @@ impl<Rule: ValidateString> VStr<Rule> {
 
     /// Erase the rules.
     ///
+    /// [`erase_rules`](VStr::erase_rules) converts a `&VStr<_>`
+    /// (of any rule) to `&VStr<ValidateAll>`. [`ValidateAll`]
+    /// is a special, permissive rule that validates everything.
+    ///
     /// Also see: [`VStr::assume_valid`].
-    ///
-    /// ([`ValidateAll`] is a null rule that validates everything.)
-    ///
-    /// Note: no rule currently implements `Into<ValidateAll>` by default
-    /// due to a limitation in Rust's trait system (I cannot specify
-    /// a negation of a trait bound, namely `T: !ValidateAll`.)
     pub fn erase_rules(&self) -> &VStr<ValidateAll> {
         VStr::<ValidateAll>::assume_valid(&self.inner)
     }
@@ -247,8 +256,8 @@ impl<Rule: ValidateString> VStr<Rule> {
 impl<Rule: ValidateString> VStr<Later<Rule>> {
     /// Try to validate it now.
     ///
-    /// See [`VStr::try_validate`] for more information and examples.
-    pub fn try_validate_now(&self) -> Result<&VStr<Rule>, Rule::Error> {
+    /// See [`Later`] for more information and examples.
+    pub fn make_strict(&self) -> Result<&VStr<Rule>, Rule::Error> {
         self.as_ref().validate()
     }
 }
@@ -259,24 +268,49 @@ impl<Rule: ValidateString> VStr<Later<Rule>> {
 /// a rule that should be applied later.
 ///
 /// To lower a `vstr<Later<Rule>>` to `vstr<Rule>`, use
-/// [`VStr::try_validate_now`].
+/// [`VStr::make_strict`].
 ///
 /// # Example
 ///
+/// See also: [`cheap_rule`](crate::cheap_rule).
+///
 /// ```
 /// use validus::prelude::*;
-/// use validus::easy_rule;
+/// use validus::cheap_rule;
 ///
+/// struct EmailError;
 /// struct Email;
-/// easy_rule!(Email, err = &'static str, |s: &str| s.contains('@').then(|| ()).ok_or("no @"));
+/// cheap_rule!(Email,
+///     err = EmailError,
+///     msg = "no @ symbol",
+///     |s: &str| s.contains('@')
+/// );
 ///
-/// let v1: &vstr<Later<Email>> = "hi@example.com".validate::<Later<Email>>().unwrap();
-/// let v1: Result<&vstr<Email>, _> = v1.try_validate_now();
+/// // Here, we start with an email with deferred (postponed) validation.
+/// // Validation of `Later<_>` is infallible.
+/// let v1: &vstr<Later<Email>> = "hi@example.com".validate().unwrap();
+/// // Now, we truly validate it.
+/// let v1: Result<&vstr<Email>, _> = v1.make_strict();
 /// assert!(v1.is_ok());
 ///
+/// // So, again, this is going to succeed.
 /// let v2 = "notgood".validate::<Later<Email>>().unwrap();
-/// let v2 = v2.try_validate_now();
+/// // But, when we check it, it will fail, since it is not a good email address
+/// // (according to the rule we defined).
+/// let v2 = v2.make_strict();
 /// assert!(v2.is_err());
+///
+/// // With the extension `StrExt`, we can also call `.assume_valid()`
+/// // to skip validation, since we know that `Later<_>` doesn't validate.
+///
+/// let relaxed = "hi@example.com".assume_valid::<Later<Email>>();
+/// assert!(relaxed.revalidate().is_ok()); // This is infallible because `Later<_>` is infallible.
+/// assert!(relaxed.make_strict().is_ok()); // Later<Email> -> Email.
+///
+/// let relaxed = "nonono".assume_valid::<Later<Email>>();
+/// assert!(relaxed.revalidate().is_ok()); // Yup, it is still infallible.
+/// let strict = relaxed.make_strict(); // Now, we made it strict.
+/// assert!(strict.is_err()); // It didn't make it (it was a bad email address.)
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -443,11 +477,30 @@ where
 pub trait StrExt<'a> {
     /// Validate a string slice.
     fn validate<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error>;
+
+    /// Assume a valid string slice.
+    fn assume_valid<Rule: ValidateString>(self) -> &'a VStr<Rule>;
+
+    /// Validate the string slice or panic.
+    fn validate_or_panic<Rule: ValidateString>(self) -> &'a VStr<Rule>
+    where
+        Rule::Error: Debug;
 }
 
 impl<'a> StrExt<'a> for &'a str {
     fn validate<Rule: ValidateString>(self) -> Result<&'a VStr<Rule>, Rule::Error> {
         VStr::<Rule>::try_validate(self)
+    }
+
+    fn assume_valid<Rule: ValidateString>(self) -> &'a VStr<Rule> {
+        VStr::<Rule>::assume_valid(self)
+    }
+
+    fn validate_or_panic<Rule: ValidateString>(self) -> &'a VStr<Rule>
+    where
+        Rule::Error: Debug,
+    {
+        VStr::<Rule>::try_validate(self).unwrap()
     }
 }
 
@@ -513,11 +566,16 @@ impl<Rule: ValidateString> Hash for VStr<Rule> {
     }
 }
 
-/// Promote a function into a rule with a given type name.
+/// Define a rule using a closure.
 ///
 /// The closure that returns a `Result` is the validation function.
 ///
 /// It will be used to implement [`ValidateString`] for the rule.
+///
+/// # See Also
+///
+/// - [`cheap_rule`](crate::cheap_rule) for ad-hoc or simple errors.
+/// - [`ValidateString`]
 ///
 /// # Example
 ///
@@ -550,13 +608,26 @@ macro_rules! easy_rule {
     };
 }
 
-/// Promote a function into a rule with a given type name.
+/// Define a rule using a predicate with ad-hoc errors.
 ///
-/// The closure that returns a `bool` is the validation function.
+/// This is done by implementing [`ValidateString`] for your
+/// rule using the closure. Since [`ValidateString`] expects
+/// your closure to return `Result<(), Error>` (where `Error` refers
+/// to some choice of an error type), [`cheap_rule`](crate::cheap_rule)
+/// converts your closure's return type to `Result<(), Error>`
+/// so that `true` is mapped to `Ok(())` and `false` is mapped
+/// to your error type or error message.
 ///
-/// If the validation fails, the error message of your choice will be returned.
+/// The error type is:
+/// - `&'static str` with the `msg` value if you don't specify the `err` parameter.
+/// - Your error type `err` if you do specify the `err` parameter.
 ///
-/// The error message is a `&'static str`.
+/// # See also
+///
+/// - [`easy_rule`](crate::easy_rule) is more flexible in that
+/// it allows you to construct your own error instance so you can throw
+/// errors that are neither ZSTs nor implementing `Debug + Display + Error`.
+/// - [`ValidateString`]
 ///
 /// # Example
 ///
@@ -564,12 +635,43 @@ macro_rules! easy_rule {
 /// use validus::prelude::*;
 /// use validus::cheap_rule;
 ///
+/// // 1. String errors.
+/// // The error type is &'static str.
+///
+/// // 1a. Define your rule. I called it Email.
 /// struct Email;
+/// // 1b. Implement ValidateString for your rule
+/// // using cheap_rule!.
 /// cheap_rule!(Email, msg = "invalid email", |s: &str| {
 ///     s.contains('@')
 /// });
-///
+/// // 1c. Try it out.
 /// let vv: &vstr<Email> = "hello@world".validate::<Email>().unwrap();
+///
+/// // 2. Your error type.
+/// // cheap_rule! implements Debug + Display + Error.
+/// // Both the Debug and Display errors are made to display the string
+/// // "invalid phone number".
+///
+/// // 2a. Define your error type. Make it a ZST.
+/// // cheap_rule! will implement Debug, Display, and Error for you.
+/// struct BadPhoneError;
+/// // 2b. Define your rule.
+/// struct Phone;
+/// // 2c. Implement ValidateString for your rule.
+/// cheap_rule!(Phone,
+///     err = BadPhoneError,
+///     msg = "invalid phone number",
+///     |s: &str| {
+///         s.len() == 11 && s.starts_with("07")
+///     }
+/// );
+/// // 2d. Try it out:
+///
+/// let vv: &vstr<Phone> = "07123456789".validate::<Phone>().unwrap();
+/// assert_eq!(vv, "07123456789");
+/// let vv: BadPhoneError = "123".validate::<Phone>().unwrap_err();
+/// assert_eq!(vv.to_string(), "invalid phone number");
 /// ```
 #[macro_export]
 macro_rules! cheap_rule {
@@ -582,6 +684,37 @@ macro_rules! cheap_rule {
                     Ok(())
                 } else {
                     Err($msg)
+                }
+            }
+        }
+    };
+    ($name:ty, err = $err:tt, msg = $msg:expr, $func:expr) => {
+        // Implement the Display type on the error type.
+        impl std::fmt::Display for $err {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Display::fmt($msg, f)
+            }
+        }
+
+        // Similarly, Debug.
+        impl std::fmt::Debug for $err {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Debug::fmt($msg, f)
+            }
+        }
+
+        // And, Error.
+        impl std::error::Error for $err {}
+
+        // ValidateString, now.
+        impl $crate::vstr::ValidateString for $name {
+            type Error = $err;
+
+            fn validate_str(s: &str) -> Result<(), Self::Error> {
+                if $func(s) {
+                    Ok(())
+                } else {
+                    Err($err {})
                 }
             }
         }
@@ -905,11 +1038,11 @@ mod tests {
     #[test]
     fn test_later1() {
         let v1 = "hi@example.com".validate::<Later<Email>>().unwrap();
-        let v1 = v1.try_validate_now();
+        let v1 = v1.make_strict();
         assert!(v1.is_ok());
 
         let v2 = "notgood".validate::<Later<Email>>().unwrap();
-        let v2 = v2.try_validate_now();
+        let v2 = v2.make_strict();
         assert!(v2.is_err());
     }
 
