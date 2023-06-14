@@ -1,4 +1,4 @@
-//! Validus, a string validation library
+//! `validus` --- validated string slices
 #![doc = include_str!("../README.md")]
 
 pub mod vstr;

@@ -15,9 +15,9 @@
 //! The helpful macros [`easy_rule`](crate::easy_rule) and [`cheap_rule`](crate::cheap_rule)
 //! help you with this task.
 
-use std::{fmt::Display, marker::PhantomData, ops::Not};
+use std::{fmt::Display, marker::PhantomData};
 
-use crate::{cheap_rule, easy_rule, vstr::*};
+use crate::{cheap_rule, vstr::*};
 
 use thiserror::Error;
 
@@ -337,71 +337,15 @@ impl<L: ValidateString, R: ValidateString> ValidateString for Disj<L, R> {
     }
 }
 
-/// String had a zero-byte somewhere.
-#[derive(Debug, Error)]
-#[error("string had a zero-byte somewhere")]
-pub struct StringHasZeroByteError;
-
-/// Require the strong to not have any 0-byte anywhere.
-pub struct StringNoZeroByteRule;
-
-easy_rule!(
-    StringNoZeroByteRule,
-    err = StringHasZeroByteError,
-    |s: &str| {
-        s.as_bytes()
-            .contains(&0)
-            .not()
-            .then(|| ())
-            .ok_or(StringHasZeroByteError)
-    }
-);
-
 /// String had non-ASCII bytes.
-#[derive(Debug, Error)]
-#[error("string had non-ASCII bytes")]
-pub struct StringHasNonAsciiError;
+pub struct StringHadNonAsciiError;
 
 /// Require the string to not have any non-ASCII bytes.
 pub struct StringAsciiRule;
 
-easy_rule!(StringAsciiRule, err = StringHasNonAsciiError, |s: &str| {
-    s.as_bytes()
-        .iter()
-        // this is fine. UTF-8 makes sure that ASCII
-        // codepoints are ASCII-compatible, and the
-        // set of ASCII codepoints and non-ASCII codepoints
-        // in the image of the UTF-8 representations
-        // are disjoint.
-        .all(|&b| b.is_ascii())
-        .then(|| ())
-        .ok_or(StringHasNonAsciiError)
-});
-
-/// String had control characters.
-pub struct StringHasControlCharError;
-
-/// Require the string to not have any control characters.
-pub struct StringNoControlCharRule;
-
 cheap_rule!(
-    StringNoControlCharRule,
-    err = StringHasControlCharError,
-    msg = "string had control characters",
-    |s: &str| { s.chars().all(|c| !c.is_control()) }
+    StringAsciiRule,
+    err = StringHadNonAsciiError,
+    msg = "string had non-ASCII bytes",
+    |s: &str| s.as_bytes().iter().all(|&b| b.is_ascii())
 );
-
-/// String had whitespace characters.
-pub struct StringHasWhitespaceError;
-
-// Require the string to not have any whitespace characters.
-pub struct StringNoWhitespaceRule;
-
-cheap_rule!(
-    StringNoWhitespaceRule,
-    err = StringHasWhitespaceError,
-    msg = "string had whitespace",
-    |s: &str| { s.chars().all(|c| !c.is_whitespace()) }
-);
-
-// We can go on forever... Let me take a break here.

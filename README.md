@@ -1,5 +1,44 @@
 # `validus` --- validated string slices
 
+```rust
+use std::sync::OnceLock;
+
+use validus::prelude::*; // vstr, cheap_rule, <&str>.validate(), etc.
+use validus::cheap_rule;
+
+use regex::Regex;
+
+const USERNAME_RE_S: &str = r#"^[a-zA-Z0-9_]{1,16}$"#;
+static USERNAME_RE: OnceLock<Regex> = OnceLock::new();
+
+// 1. Define your rule.
+struct BadUsernameError;
+struct UsernameRule;
+cheap_rule!(
+    UsernameRule,
+    err = BadUsernameError,
+    msg = "bad username",
+    |s: &str| {
+        let re = USERNAME_RE.get_or_init(|| Regex::new(USERNAME_RE_S).unwrap());
+        re.is_match(s)
+    }
+);
+
+// 2. Restrict your string slice with the rule.
+type Username = vstr<UsernameRule>;
+
+let input = "hello";
+let username: Result<&Username, BadUsernameError> = input.validate();
+assert!(username.is_ok());
+assert_eq!(username.unwrap(), "hello");
+
+let input = "haha 😊";
+let username: Result<&Username, _> = input.validate();
+assert!(username.is_err());
+
+// Plus, this library has serde support with validation, and more.
+```
+
 This library provides a `VStr<Rule>` type, which is an un-sized
 wrapper around regular string slices (`str`). Since it is un-sized,
 it can be used as a slice, but it cannot be used as a value. Instead,
@@ -18,12 +57,50 @@ using the inner string slice.
 
 (`VStr` is aliased to `vstr` for convenience.)
 
+- [`vstr`](crate::vstr::vstr) (or the proper name, `VStr`).
+- [`cheap_rule`](crate::cheap_rule).
+
+Since `vstr<_>` compares and hashes the same as `str` references,
+they can be used directly as keys in `HashMap`s and `HashSet`s.
+
+```rust
+// Illustration: using vstr<_> as a key in a HashMap.
+
+use std::collections::HashMap;
+
+use validus::prelude::*;
+use validus::cheap_rule;
+
+struct BadUsernameError;
+struct UsernameRule;
+cheap_rule!(
+    UsernameRule,
+    err = BadUsernameError,
+    msg = "bad username",
+    |s: &str| s.len() <= 16
+);
+
+type Username = vstr<UsernameRule>;
+
+let mut map = HashMap::new();
+map.insert("hello".validate().unwrap(), 1);
+map.insert("world".validate().unwrap(), 2);
+
+// assume_valid bypasses validation, incurring no computational cost,
+// so it's useful in this case.
+assert_eq!(map.get("hello".assume_valid::<UsernameRule>()), Some(&1));
+assert_eq!(map.get("world".assume_valid::<UsernameRule>()), Some(&2));
+```
+
 With the optional `serde` feature, this crate also
 supports serialization and deserialization with validation.
 This means that you can use `vstr<_>` as a field in a
 `serde`-powered struct, and if the input fails the validation,
 it will be rejected and an error according to the validation
 rule's associated `Error` type will be returned.
+
+- The `serde` feature is enabled by default. Disable it using
+`default-features = false` in your `Cargo.toml` to disable it.
 
 ```rust
 // Illustration: a struct with a validated email field.
@@ -36,6 +113,8 @@ use serde::Deserialize;
 
 // This rule is very generous. It accepts any string that
 // contains an at-symbol.
+// (When the error type is not specified, it is inferred to
+// be &'static str.)
 struct EmailRule;
 cheap_rule!(EmailRule, msg = "no at-symbol", |s: &str| s.contains('@'));
 
@@ -59,9 +138,12 @@ assert!(result.unwrap().email.as_str() == "hi@example.com");
 You are also given the power to override the underlying
 mechanism using `assume_valid`. This is useful when you
 have a `vstr<_>` that you know is valid, but that is difficult to
-decide at a given moment. The crate provides `revalidate()`
+decide at a given moment. The crate provides `check()`
 method that can be used to establish the validity of a
 `vstr<_>`.
+
+- [`assume_valid`](crate::vstr::VStr::assume_valid)
+- [`check`](crate::vstr::VStr::check)
 
 ```rust
 // Illustration: overriding the validation mechanism.
@@ -79,7 +161,7 @@ let v: &vstr<No> = vstr::assume_valid(s);
 assert_eq!(v, "hello");
 
 // But it's not valid. Let's test that.
-assert!(v.revalidate().is_err());
+assert!(v.check().is_err());
 ```
 
 (`assume_valid` is NOT `unsafe`: `vstr` makes no further
@@ -95,6 +177,11 @@ convert a reference to `vstr<Rule1>` to a reference to
 `vstr<Rule2>`. This requires `Rule` to implement `Into<Rule2>`.
 (Otherwise, the regular `try_change_rules` can be used
 between any two rules.)
+
+- [`change_rules`](crate::vstr::VStr::change_rules)
+- [`try_change_rules`](crate::vstr::VStr::try_change_rules)
+- Rules are ZSTs that implement [`ValidateString`](crate::vstr::ValidateString).
+- [`Into`] and [`From`]
 
 ```rust
 // Illustration: declaring implication.
@@ -145,6 +232,11 @@ to convert your rule to `ValidateAll`, you can still use
 a dedicated method called `erase_rules` just for that.
 From `ValidateAll`, you can use `try_change_rules` to
 convert to any other rule.
+
+- [`try_change_rules`](crate::vstr::VStr::try_change_rules)
+- [`change_rules`](crate::vstr::VStr::change_rules)
+- [`erase_rules`](crate::vstr::VStr::erase_rules)
+- [`ValidateAll`](crate::vstr::ValidateAll)
 
 ## `serde` with validation
 
@@ -197,12 +289,64 @@ assert!(serde_json::from_str::<Box<Email>>(&s).is_err());
 }
 ```
 
+## Deferred validation with [`Later`](crate::vstr::Later)
+
+Sometimes, you want to validate a string slice only when it is actually used.
+
+For this need, there is a rule called `Later`
+that bypasses all validation, but specifies what rule it is supposed to be
+validated with. When the validation is actually needed, you can call
+`make_strict` to validate the string slice
+and convert it to a `vstr` with the specified rule.
+
+Here, I copy the example code from the `Later` type documentation.
+
+- [`Later`](crate::vstr::Later)
+- [`make_strict`](crate::vstr::VStr::make_strict)
+- [`assume_valid`](crate::vstr::VStr::assume_valid)
+
+```rust
+use validus::prelude::*;
+use validus::cheap_rule;
+
+struct EmailError;
+struct Email;
+cheap_rule!(Email,
+    err = EmailError,
+    msg = "no @ symbol",
+    |s: &str| s.contains('@')
+);
+
+// Here, we start with an email with deferred (postponed) validation.
+// Validation of `Later<_>` is infallible.
+let v1: &vstr<Later<Email>> = "hi@example.com".validate().unwrap();
+// Now, we truly validate it.
+let v1: Result<&vstr<Email>, _> = v1.make_strict();
+assert!(v1.is_ok());
+
+// So, again, this is going to succeed.
+let v2 = "notgood".validate::<Later<Email>>().unwrap();
+// But, when we check it, it will fail, since it is not a good email address
+// (according to the rule we defined).
+let v2 = v2.make_strict();
+assert!(v2.is_err());
+
+// With the extension `StrExt`, we can also call `.assume_valid()`
+// to skip validation, since we know that `Later<_>` doesn't validate.
+
+let relaxed = "hi@example.com".assume_valid::<Later<Email>>();
+assert!(relaxed.check().is_ok()); // This is infallible because `Later<_>` is infallible.
+assert!(relaxed.make_strict().is_ok()); // Later<Email> -> Email.
+
+let relaxed = "nonono".assume_valid::<Later<Email>>();
+assert!(relaxed.check().is_ok()); // Yup, it is still infallible.
+let strict = relaxed.make_strict(); // Now, we made it strict.
+assert!(strict.is_err()); // It didn't make it (it was a bad email address.)
+```
+
 ## ... and, more!
 
-- `Later<R>` type wraps around a rule (`R`) and delays the validation
-until `vstr.try_validate_now()` is called. This is useful when you want to
-validate a string slice only when it is actually used. See: [`Later`](crate::vstr::Later).
-- Check out the built-in extensions in the module [`vstrext`][crate::vstrext].
+- Check out some of the prepared validation rules in the module [`vstrext`][crate::vstrext].
 The module should already have been imported in the prelude module
 (it's feature-gated by `ext`, which is enabled by default.)
 

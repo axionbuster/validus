@@ -212,7 +212,7 @@ impl<Rule: ValidateString> VStr<Rule> {
     /// return `Ok`.
     /// - If `self` was created with `assume_valid`, then this should
     /// return `Ok` if and only if the underlying data is actually valid.
-    pub fn revalidate(&self) -> Result<&Self, Rule::Error> {
+    pub fn check(&self) -> Result<&Self, Rule::Error> {
         Rule::validate_str(self.as_ref())?;
         Ok(self)
     }
@@ -304,11 +304,11 @@ impl<Rule: ValidateString> VStr<Later<Rule>> {
 /// // to skip validation, since we know that `Later<_>` doesn't validate.
 ///
 /// let relaxed = "hi@example.com".assume_valid::<Later<Email>>();
-/// assert!(relaxed.revalidate().is_ok()); // This is infallible because `Later<_>` is infallible.
+/// assert!(relaxed.check().is_ok()); // This is infallible because `Later<_>` is infallible.
 /// assert!(relaxed.make_strict().is_ok()); // Later<Email> -> Email.
 ///
 /// let relaxed = "nonono".assume_valid::<Later<Email>>();
-/// assert!(relaxed.revalidate().is_ok()); // Yup, it is still infallible.
+/// assert!(relaxed.check().is_ok()); // Yup, it is still infallible.
 /// let strict = relaxed.make_strict(); // Now, we made it strict.
 /// assert!(strict.is_err()); // It didn't make it (it was a bad email address.)
 /// ```
@@ -865,7 +865,7 @@ mod tests {
         let assume_good: &vstr<Email> = VStr::assume_valid(input);
         assert_eq!(assume_good.as_ref(), "wow");
 
-        assert!(assume_good.revalidate().is_err());
+        assert!(assume_good.check().is_err());
     }
 
     #[test]
@@ -998,7 +998,7 @@ mod tests {
         assert_eq!(v, "hello");
 
         // But it's not valid. Let's test that.
-        assert!(v.revalidate().is_err());
+        assert!(v.check().is_err());
     }
 
     #[test]
