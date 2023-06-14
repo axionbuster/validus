@@ -230,6 +230,11 @@ pub struct BothError<L, R> {
     pub right: R,
 }
 
+/// The underlying rule passed.
+#[derive(Debug, Error)]
+#[error("negation passed")]
+pub struct NegationPassedError;
+
 /// Require both rules to pass, from left to right.
 ///
 /// See also:
@@ -310,6 +315,15 @@ pub struct Disj<L: ValidateString, R: ValidateString> {
     _r: PhantomData<R>,
 }
 
+/// Require the rule to NOT pass.
+///
+/// If the rule doesn't pass, discard the error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct Neg<R: ValidateString> {
+    _r: PhantomData<R>,
+}
+
 impl<L: ValidateString, R: ValidateString> ValidateString for Conj<L, R> {
     type Error = EitherError<L::Error, R::Error>;
 
@@ -333,6 +347,17 @@ impl<L: ValidateString, R: ValidateString> ValidateString for Disj<L, R> {
                     right: er,
                 }),
             },
+        }
+    }
+}
+
+impl<R: ValidateString> ValidateString for Neg<R> {
+    type Error = NegationPassedError;
+
+    fn validate_str(s: &str) -> Result<(), Self::Error> {
+        match R::validate_str(s) {
+            Ok(()) => Err(NegationPassedError),
+            Err(_) => Ok(()),
         }
     }
 }
