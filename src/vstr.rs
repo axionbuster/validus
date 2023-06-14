@@ -721,7 +721,536 @@ macro_rules! cheap_rule {
     };
 }
 
-// TODO: I can't decide what the owned type should be.
+impl<R: ValidateString> ToOwned for vstr<R> {
+    type Owned = Box<vstr<R>>;
+
+    fn to_owned(&self) -> Self::Owned {
+        Box::from(self)
+    }
+}
+
+macro_rules! with_cow_feature {
+    ($($item:item)*) => {
+        $(
+            #[cfg(feature = "cow")]
+            $item
+        )*
+    }
+}
+
+with_cow_feature! {
+
+use std::{borrow::Cow, ops::Deref};
+
+/// An immutable string (or string slice) that may or may not have been validated
+/// according to a certain rule.
+///
+/// The structure encodes information
+/// whether the underlying string slice is certainly valid or of uncertain status.
+///
+/// On the other hand, this structure does **NOT** encode whether the underlying
+/// is *certainly invalid*.
+///
+/// ## Creation
+///
+/// - [`new`](Self::new): empty string, borrowed, uncertain.
+/// - [`new_unchecked`](Self::new_unchecked): `Cow<str>`, certain (unchecked).
+/// - [`from_cow_str`](Self::from_cow_str): `Cow<str>`, uncertain.
+/// - [`from_cow_vstr`](Self::from_cow_vstr): `Cow<vstr<R>>`, uncertain.
+/// - [`from_str_slice`](Self::from_str_slice): `str`, borrowed, uncertain.
+/// - [`from_string`](Self::from_string): `String`, owned, uncertain.
+/// - [`from_vstr`](Self::from_vstr): `vstr<R>`, borrowed, certain.
+/// - [`from_vstr_owned`](Self::from_vstr_owned): `vstr<R>`, owned, certain.
+///
+/// Validation is **never** checked on creation.
+///
+/// [`is_certain`](Self::is_certain) is `false` after creation.
+/// To check validity, use one of the many methods below.
+///
+/// ## Checking validity
+///
+/// - [`is_certain`](Self::is_certain): whether the string has been checked before.
+/// This is a fast check.
+/// - [`try_new`](Self::try_new): try to create a `VCow<_>` from a `Cow<str>`
+/// while checking validity.
+/// - [`into_validate`](Self::into_validate): try to check the validity of a `VCow<_>`
+/// and consume it; return a new instance of `VCow<_>` or a tuple of
+/// regular `Cow<str>` and an error.
+/// - [`validate_mut`](Self::validate_mut): try to check the validity of a `VCow<_>`
+/// and mutate it in-place; return `Ok(())` or an error.
+/// - [`decide_valid`](Self::decide_valid): decide whether a `VCow<_>` is valid or not.
+///
+/// ## Overriding checks
+///
+/// - [`into_mark_surely_valid`](Self::into_mark_surely_valid): mark a `VCow<_>` as certainly
+/// valid or uncertain.
+/// - [`mark_surely_valid_mut`](Self::mark_surely_valid_mut): same, but with
+/// a mutable reference.
+///
+/// Consumers of a `VCow<_>` are supposed to simply trust the flag, so
+/// be careful when using these methods.
+///
+/// Also, note that these methods are not `unsafe`.
+///
+/// # Example (with `serde` support)
+///
+/// ```
+/// use std::borrow::Cow;
+///
+/// use validus::prelude::*;
+/// use validus::cheap_rule;
+///
+/// use serde::Deserialize;
+///
+/// // Define a rule. Let's say, zip codes (US).
+/// // Very simplistic; only the 5 digit zip codes.
+/// struct ZipCodeRule;
+/// cheap_rule!(ZipCodeRule, msg = "invalid zip code", |s: &str| {
+///     s.len() == 5 && s.chars().all(|c| c.is_ascii_digit())
+/// });
+///
+/// // Define a struct that uses the rule.
+/// #[derive(Debug, Deserialize)]
+/// struct Address<'a> {
+///     pub zip_code: VCow<'a, ZipCodeRule>,
+/// }
+///
+/// // Journey 1: don't know -> valid -> unwrap.
+/// let mut addr: Address = serde_json::from_str(r#"{"zip_code": "12345"}"#).unwrap();
+/// assert_eq!(addr.zip_code, "12345");
+/// assert!(!addr.zip_code.is_certain());
+/// VCow::validate_mut(&mut addr.zip_code).unwrap();
+/// assert!(addr.zip_code.is_certain());
+/// assert_eq!(addr.zip_code.opt_as_vstr(), Some("12345".assume_valid()));
+///
+/// // Journey 2: don't know -> invalid.
+/// let mut addr: Address = serde_json::from_str(r#"{"zip_code": "1234"}"#).unwrap();
+/// assert_eq!(addr.zip_code, "1234");
+/// assert!(!addr.zip_code.is_certain());
+/// assert!(VCow::validate_mut(&mut addr.zip_code).is_err());
+/// assert!(!addr.zip_code.is_certain());
+/// assert_eq!(addr.zip_code.opt_as_vstr(), None);
+/// ```
+pub struct VCow<'a, R: ValidateString> {
+    _rule: PhantomData<R>,
+    /// Certainly valid?
+    ///
+    /// - `true`: Certain.
+    /// - `false`: Uncertain (may or may not be valid).
+    ///
+    /// NOTE: no support for certain denial.
+    /// Only certain affirmation and uncertainty.
+    ///
+    /// NOTE: the responsibility to uphold any guarantees
+    /// of the rule is on whoever that sets this to `true`.
+    ///
+    /// NOTE: readers are expected to simply trust this
+    /// value to reflect reality.
+    ///
+    /// NOTE: Setting this value is "safe" (no undefined behavior) in all
+    /// contexts.
+    surely_valid: bool,
+    cow: Cow<'a, str>,
+}
+
+impl<'a, R: ValidateString> VCow<'a, R> {
+    /// Create one that represents a borrowed empty string
+    /// that is not certain to be validated.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make one that may or may not be valid.
+    pub fn from_cow_str(s: Cow<'a, str>) -> Self {
+        Self {
+            _rule: PhantomData,
+            surely_valid: false,
+            cow: s,
+        }
+    }
+
+    /// Make one from a string slice.
+    pub fn from_str_slice(s: &'a str) -> Self {
+        Self::from_cow_str(Cow::Borrowed(s))
+    }
+
+    /// Make one from a `String`.
+    pub fn from_string(s: String) -> Self {
+        Self::from_cow_str(Cow::Owned(s))
+    }
+
+    /// Make one from a `vstr`.
+    pub fn from_vstr(s: &'a vstr<R>) -> Self {
+        Self::from_cow_str(Cow::Borrowed(s.as_ref()))
+    }
+
+    /// Make one from the owned type of `vstr`.
+    ///
+    /// This causes a clone.
+    ///
+    /// (`Box` and `String` have different assumptions about the allocation,
+    /// so a clone is necessary.)
+    pub fn from_vstr_owned(s: <vstr<R> as ToOwned>::Owned) -> Self {
+        Self::from_cow_str(Cow::Owned(s.as_ref().into()))
+    }
+
+    /// Make one, admitting a [`Cow<'a, vstr<R>>`],
+    /// that which can be trusted to be valid.
+    pub fn from_cow_vstr(s: Cow<'a, vstr<R>>) -> Self {
+        Self {
+            _rule: PhantomData,
+            surely_valid: true,
+            cow: match s {
+                Cow::Owned(s) => Cow::Owned(s.to_string()),
+                Cow::Borrowed(s) => Cow::Borrowed(s.as_ref()),
+            },
+        }
+    }
+
+    /// Make one, assuming validity without checking.
+    pub fn new_unchecked(s: Cow<'a, str>) -> Self {
+        Self {
+            _rule: PhantomData,
+            surely_valid: true,
+            cow: s,
+        }
+    }
+
+    /// Make one while checking validity.
+    pub fn try_new(s: Cow<'a, str>) -> Result<Self, R::Error> {
+        R::validate_str(&s)?;
+        Ok(Self {
+            _rule: PhantomData,
+            surely_valid: true,
+            cow: s,
+        })
+    }
+
+    /// Mark validity
+    ///
+    /// - `true`: certain
+    /// - `false: uncertain, always correct
+    pub fn into_mark_surely_valid(this: Self, surely_valid: bool) -> Self {
+        Self {
+            surely_valid,
+            ..this
+        }
+    }
+
+    /// Mark it as valid.
+    ///
+    /// - `true`: certain
+    /// - `false: uncertain, always correct
+    pub fn mark_surely_valid_mut(this: &mut Self, surely_valid: bool) {
+        this.surely_valid = surely_valid;
+    }
+
+    /// Check in place.
+    pub fn decide_valid(this: &Self) -> Result<(), R::Error> {
+        R::validate_str(&this.cow)
+    }
+
+    /// Try to promote itself by checking validity.
+    pub fn into_validate(this: Self) -> Result<Self, R::Error> {
+        if this.surely_valid {
+            Ok(this)
+        } else {
+            Self::try_new(this.cow)
+        }
+    }
+
+    /// Try to promote itself by checking validity.
+    pub fn validate_mut(this: &mut Self) -> Result<(), R::Error> {
+        if this.surely_valid {
+            Ok(())
+        } else {
+            R::validate_str(&this.cow)?;
+            this.surely_valid = true;
+            Ok(())
+        }
+    }
+
+    /// Is it certain that it's valid?
+    pub fn is_certain(&self) -> bool {
+        self.surely_valid
+    }
+
+    /// Take the inner `Cow`
+    pub fn into_cow(self) -> Cow<'a, str> {
+        self.cow
+    }
+
+    /// Borrow the inner `Cow`
+    pub fn as_cow(&self) -> &Cow<'a, str> {
+        &self.cow
+    }
+
+    /// Borrow the inner `Cow` as a `str`
+    pub fn as_str(&self) -> &str {
+        self.cow.as_ref()
+    }
+
+    /// Borrow the inner `Cow` as a `vstr` only if determined earlier to be certainly valid.
+    pub fn opt_as_vstr(&self) -> Option<&vstr<R>> {
+        if self.surely_valid {
+            Some(self.as_str().assume_valid())
+        } else {
+            None
+        }
+    }
+
+    /// Perform the validation if uncertain, then either get the `Cow` as `vstr`
+    /// or get a bundle of the validation error and a `Cow` of `str`.
+    ///
+    /// Do not change borrowed vs. owned status.
+    ///
+    /// (Thus, memory may not be allocated except via any inner working
+    /// mechanism of the rule.)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    ///
+    /// use validus::prelude::*;
+    /// use validus::cheap_rule;
+    ///
+    /// struct UsernameRule;
+    /// cheap_rule!(
+    ///     UsernameRule,
+    ///     msg = "bad username",
+    ///     |s: &str| {
+    ///         // Length
+    ///         (3..=16).contains(&s.len())
+    ///         // Start with an alphabet
+    ///         && s.chars().next().unwrap().is_ascii_alphabetic()
+    ///         // Only alphanumerics and underscores
+    ///         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    ///     }
+    /// );
+    ///
+    /// struct UserRegistration {
+    ///     username: VCow<'static, UsernameRule>,
+    /// }
+    ///
+    /// let good = UserRegistration {
+    ///     username: VCow::from_str_slice("good_username"),
+    /// };
+    ///
+    /// let bad = UserRegistration {
+    ///     username: VCow::from_str_slice("bad 123"),
+    /// };
+    ///
+    /// // We aren't certain yet.
+    /// assert!(!good.username.is_certain());
+    /// assert!(!bad.username.is_certain());
+    ///
+    /// // .into_validated_cow() will check validity and unwrap the inner Cow
+    /// // either way. If valid, it will be Cow<'_, vstr<_>>,
+    /// // and if invalid, it will be (Cow<'_, str>, _::Error).
+    ///
+    /// let cow_good = good.username.into_validated_cow().unwrap();
+    /// let (cow_bad, why) = bad.username.into_validated_cow().unwrap_err();
+    ///
+    /// assert_eq!(cow_good.as_ref(), "good_username");
+    /// assert_eq!(cow_bad.as_ref(), "bad 123");
+    /// assert_eq!(why, "bad username");
+    ///
+    /// // Still borrowed.
+    /// assert!(matches!(cow_good, Cow::Borrowed(_)));
+    /// assert!(matches!(cow_bad, Cow::Borrowed(_)));
+    /// ```
+    #[allow(clippy::type_complexity)]
+    pub fn into_validated_cow(self) -> Result<Cow<'a, vstr<R>>, (Cow<'a, str>, R::Error)> {
+        if self.surely_valid {
+            Ok(match self.cow {
+                Cow::Owned(s) => Cow::Owned(s.assume_valid().to_owned()),
+                Cow::Borrowed(s) => Cow::Borrowed(s.assume_valid()),
+            })
+        } else {
+            match R::validate_str(&self.cow) {
+                Ok(()) => Ok(match self.cow {
+                    Cow::Owned(s) => Cow::Owned(s.assume_valid().to_owned()),
+                    Cow::Borrowed(s) => Cow::Borrowed(s.assume_valid()),
+                }),
+                Err(e) => Err((self.cow, e)),
+            }
+        }
+    }
+}
+
+impl<R: ValidateString> Display for VCow<'_, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.cow, f)
+    }
+}
+
+impl<R: ValidateString> Debug for VCow<'_, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.cow, f)
+    }
+}
+
+impl<R: ValidateString> Clone for VCow<'_, R> {
+    fn clone(&self) -> Self {
+        Self {
+            _rule: PhantomData,
+            surely_valid: self.surely_valid,
+            cow: self.cow.clone(),
+        }
+    }
+}
+
+impl<R: ValidateString> Default for VCow<'_, R> {
+    fn default() -> Self {
+        Self::from_cow_str(Cow::default())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<R: ValidateString> Serialize for VCow<'_, R> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.cow.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, 'a, R: ValidateString> Deserialize<'de> for VCow<'a, R> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Cow::deserialize(deserializer).map(Self::from_cow_str)
+    }
+}
+
+impl<'a, R: ValidateString> Deref for VCow<'a, R> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl<R: ValidateString> AsRef<str> for VCow<'_, R> {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl<R: ValidateString, S: ValidateString> PartialEq<VCow<'_, S>> for VCow<'_, R> {
+    fn eq(&self, other: &VCow<'_, S>) -> bool {
+        self.cow == other.cow
+    }
+}
+
+impl<R: ValidateString> PartialEq<str> for VCow<'_, R> {
+    fn eq(&self, other: &str) -> bool {
+        self.cow == other
+    }
+}
+
+impl<R: ValidateString> PartialEq<VCow<'_, R>> for str {
+    fn eq(&self, other: &VCow<'_, R>) -> bool {
+        self == other.cow
+    }
+}
+
+impl<R: ValidateString> PartialEq<&str> for VCow<'_, R> {
+    fn eq(&self, other: &&str) -> bool {
+        self.cow == *other
+    }
+}
+
+impl<R: ValidateString> PartialEq<VCow<'_, R>> for &str {
+    fn eq(&self, other: &VCow<'_, R>) -> bool {
+        *self == other.cow
+    }
+}
+
+impl<R: ValidateString> PartialEq<String> for VCow<'_, R> {
+    fn eq(&self, other: &String) -> bool {
+        self.cow == other.as_str()
+    }
+}
+
+impl<R: ValidateString> Eq for VCow<'_, R> {}
+
+impl<R: ValidateString, S: ValidateString> PartialOrd<VCow<'_, R>> for VCow<'_, S> {
+    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<std::cmp::Ordering> {
+        self.cow.partial_cmp(&other.cow)
+    }
+}
+
+impl<R: ValidateString> PartialOrd<str> for VCow<'_, R> {
+    fn partial_cmp(&self, other: &str) -> Option<std::cmp::Ordering> {
+        self.as_str().partial_cmp(other)
+    }
+}
+
+impl<R: ValidateString> PartialOrd<VCow<'_, R>> for str {
+    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<std::cmp::Ordering> {
+        self.partial_cmp(other.as_str())
+    }
+}
+
+impl<R: ValidateString> PartialOrd<&str> for VCow<'_, R> {
+    fn partial_cmp(&self, other: &&str) -> Option<std::cmp::Ordering> {
+        self.as_str().partial_cmp(*other)
+    }
+}
+
+impl<R: ValidateString> PartialOrd<VCow<'_, R>> for &str {
+    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<std::cmp::Ordering> {
+        self.partial_cmp(&other.as_str())
+    }
+}
+
+impl<R: ValidateString> Ord for VCow<'_, R> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl<R: ValidateString> Hash for VCow<'_, R> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state)
+    }
+}
+
+impl<'a, R: ValidateString> From<Cow<'a, str>> for VCow<'a, R> {
+    fn from(cow: Cow<'a, str>) -> Self {
+        Self::from_cow_str(cow)
+    }
+}
+
+impl<'a, R: ValidateString> From<&'a str> for VCow<'a, R> {
+    fn from(s: &'a str) -> Self {
+        Self::from_str_slice(s)
+    }
+}
+
+impl<R: ValidateString> From<String> for VCow<'_, R> {
+    fn from(s: String) -> Self {
+        Self::from_string(s)
+    }
+}
+
+impl<'a, R: ValidateString> From<&'a vstr<R>> for VCow<'a, R> {
+    fn from(s: &'a vstr<R>) -> Self {
+        Self::from_vstr(s)
+    }
+}
+
+impl<R: ValidateString> From<Box<vstr<R>>> for VCow<'_, R> {
+    fn from(s: Box<vstr<R>>) -> Self {
+        Self::from_vstr_owned(s)
+    }
+}
+
+impl<'a, R: ValidateString> From<Cow<'a, vstr<R>>> for VCow<'a, R> {
+    fn from(cow: Cow<'a, vstr<R>>) -> Self {
+        Self::from_cow_vstr(cow)
+    }
+}
+}
 
 #[cfg(test)]
 mod tests {
