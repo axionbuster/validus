@@ -1,5 +1,17 @@
 //! Extension of [`vstr`](crate::vstr) module with convenience rules.
 //!
+//! ## Logic
+//!
+//! - Conjunction using [`Conj`]
+//! - Disjunction using [`Disj`]
+//! - Negation using [`Neg`]
+//!
+//! For conjunction and disjunction, the rules are always checked from
+//! the left and right, and short-circuiting is used.
+//!
+//! The logical connectives may discard the error types of the rules they operate on
+//! in certain cases. These cases are documented in the respective types.
+//!
 //! ## String size checking
 //!
 //! - [`StringSizeRule`] checks a string's length against an inclusive lower and upper bound.
@@ -13,7 +25,11 @@
 //! Your rule just needs to implement [`ValidateString`].
 //!
 //! The helpful macros [`easy_rule`](crate::easy_rule) and [`cheap_rule`](crate::cheap_rule)
-//! help you with this task.
+//! can help you with this task.
+//!
+//! ## String content checking
+//!
+//! - [`StringAsciiRule`] checks if a string is ASCII.
 
 use std::{fmt::Display, marker::PhantomData};
 
@@ -318,6 +334,9 @@ pub struct Disj<L: ValidateString, R: ValidateString> {
 /// Require the rule to NOT pass.
 ///
 /// If the rule doesn't pass, discard the error.
+///
+/// If the rule passes, raise the error [`NegationPassedError`],
+/// which contains no information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Neg<R: ValidateString> {
@@ -372,5 +391,6 @@ cheap_rule!(
     StringAsciiRule,
     err = StringHadNonAsciiError,
     msg = "string had non-ASCII bytes",
+    // true -> valid, all-ASCII; false -> error (invalid)
     |s: &str| s.as_bytes().iter().all(|&b| b.is_ascii())
 );
