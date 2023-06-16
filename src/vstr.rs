@@ -743,10 +743,12 @@ with_cow_feature! {
 use std::{borrow::Cow, ops::Deref};
 
 /// An immutable string (or string slice) that may or may not have been validated
-/// according to a certain rule.
+/// according to a certain rule. The validation status is tracked at runtime.
+///
+/// This is an unstable feature. It is only available when the `cow` feature is enabled.
 ///
 /// The structure encodes information
-/// whether the underlying string slice is certainly valid or of uncertain status.
+/// regarding whether the underlying string slice is certainly valid or of uncertain status.
 ///
 /// On the other hand, this structure does **NOT** encode whether the underlying
 /// is *certainly invalid*.
@@ -795,8 +797,8 @@ use std::{borrow::Cow, ops::Deref};
 /// # Example (with `serde` support)
 ///
 /// ```
-/// use std::borrow::Cow;
-///
+/// # use std::borrow::Cow;
+/// #
 /// use validus::prelude::*;
 /// use validus::cheap_rule;
 ///
