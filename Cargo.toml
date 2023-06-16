@@ -13,6 +13,7 @@ include = [
     "README.md",
     "LICENSE",
 ]
+repository = "https://github.com/axionbuster/validus"
 
 [package.metadata."docs.rs"]
 all-features = true
