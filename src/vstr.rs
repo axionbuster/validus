@@ -335,12 +335,14 @@ impl<R: ValidateString> From<ValidateAll> for Later<R> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for Arc<str> {
     fn from(vstr: &VStr<Rule>) -> Self {
         Arc::from(&vstr.inner)
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for Arc<VStr<Rule>> {
     fn from(vstr: &VStr<Rule>) -> Self {
         let arcstr: Arc<str> = Arc::from(&vstr.inner);
@@ -350,12 +352,14 @@ impl<Rule: ValidateString> From<&VStr<Rule>> for Arc<VStr<Rule>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for Rc<str> {
     fn from(vstr: &VStr<Rule>) -> Self {
         Rc::from(&vstr.inner)
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for Rc<VStr<Rule>> {
     fn from(vstr: &VStr<Rule>) -> Self {
         let rcstr: Rc<str> = Rc::from(&vstr.inner);
@@ -365,18 +369,21 @@ impl<Rule: ValidateString> From<&VStr<Rule>> for Rc<VStr<Rule>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for String {
     fn from(vstr: &VStr<Rule>) -> Self {
         String::from(&vstr.inner)
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for Box<str> {
     fn from(vstr: &VStr<Rule>) -> Self {
         Box::from(&vstr.inner)
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> From<&VStr<Rule>> for Box<VStr<Rule>> {
     fn from(vstr: &VStr<Rule>) -> Self {
         let boxstr: Box<str> = Box::from(&vstr.inner);
@@ -403,6 +410,7 @@ impl<'a, Rule: ValidateString> From<&'a VStr<Rule>> for &'a str {
 // For some reason, I am unable to reproduce the implementation
 // for Rc and Arc. I suspect that `Box` is just special-cased
 // in the compiler (?).
+#[cfg(feature = "alloc")]
 impl<Rule: ValidateString> TryFrom<String> for Box<VStr<Rule>> {
     type Error = Rule::Error;
 
@@ -724,6 +732,7 @@ macro_rules! cheap_rule {
     };
 }
 
+#[cfg(feature = "alloc")]
 impl<R: ValidateString> ToOwned for vstr<R> {
     type Owned = Box<vstr<R>>;
 
