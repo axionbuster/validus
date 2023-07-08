@@ -15,8 +15,8 @@
 
 # use std::sync::OnceLock;
 # 
-use validus::prelude::*; // vstr, cheap_rule, <&str>.validate(), etc.
-use validus::cheap_rule;
+use validus::prelude::*; // vstr, fast_rule, <&str>.validate(), etc.
+use validus::fast_rule;
 
 # 
 # use regex::Regex;
@@ -26,19 +26,19 @@ const USERNAME_RE_S: &str = r#"^[a-zA-Z0-9_]{1,16}$"#;
 static USERNAME_RE: OnceLock<Regex> = OnceLock::new();
 
 // 1. Defining the rule type and the error type.
-// - I used cheap_rule! because I have control over the error type.
+// - I used fast_rule! because I have control over the error type.
 // - If you are using existing error types and/or function,
 // you can use easy_rule! instead. There's also a macro-free way;
 // see the `vstr` module docs for more info.
 struct BadUsernameError;
 struct UsernameRule;
-cheap_rule!(
+fast_rule!(
     UsernameRule,
     err = BadUsernameError,
     msg = "bad username",
     // The closure below could very well be a function.
     // So if the function were called `username_rule`,
-    // I could do cheap_rule!(..., ..., ..., username_rule)
+    // I could do fast_rule!(..., ..., ..., username_rule)
     |s: &str| {
         let re = USERNAME_RE.get_or_init(|| Regex::new(USERNAME_RE_S).unwrap());
         re.is_match(s)
@@ -68,7 +68,7 @@ assert!(username.is_err());
 // struct MyError;
 // struct MyRule;
 // fn my_rule_priv(s: &str) -> Result<(), MyError> { ... }
-// cheap_rule!(MyRule, err = MyError, msg = "my error", my_rule_priv);
+// fast_rule!(MyRule, err = MyError, msg = "my error", my_rule_priv);
 
 // - Use `vstr` as though it were `str`:
 // type MyStr = vstr<MyRule>;
@@ -85,7 +85,7 @@ as though it were `str` (where immutable `str` references are expected).
 don't touch it. Validus has multiple easy ways to wrap your validation
 into a `vstr<_>`-compatible rule type.
 3. **Take a shortcut when starting out.** If you don't have existing validation
-modules, you can use the [`cheap_rule!`](crate::cheap_rule) macro to quickly define a rule type
+modules, you can use the [`fast_rule!`](crate::fast_rule) macro to quickly define a rule type
 with a predicate (closure or external function, which may or may not
 belong to your crate). Your error type will be a proper `std::error::Error`
 type; you can use an ad-hoc `&'static str` error message, even.
@@ -121,11 +121,11 @@ I will give you an example of directly using `vstr` as keys in `HashMap`s and `H
 # use std::collections::HashMap;
 # 
 # use validus::prelude::*;
-# use validus::cheap_rule;
+# use validus::fast_rule;
 
 struct BadUsernameError;
 struct UsernameRule;
-cheap_rule!(
+fast_rule!(
     UsernameRule,
     err = BadUsernameError,
     msg = "bad username",
@@ -167,7 +167,7 @@ rule's associated `Error` type will be returned.
 #[cfg(feature = "serde")] {
 
 use validus::prelude::*;
-use validus::cheap_rule;
+use validus::fast_rule;
 use serde::Deserialize;
 
 // This rule is very generous. It accepts any string that
@@ -175,7 +175,7 @@ use serde::Deserialize;
 // (When the error type is not specified, it is inferred to
 // be &'static str.)
 struct EmailRule;
-cheap_rule!(EmailRule, msg = "no at-symbol", |s: &str| s.contains('@'));
+fast_rule!(EmailRule, msg = "no at-symbol", |s: &str| s.contains('@'));
 
 #[derive(Deserialize)]
 pub struct User {
@@ -212,11 +212,11 @@ Here, I copy the example code from the `Later` type documentation.
 
 ```rust
 use validus::prelude::*;
-use validus::cheap_rule;
+use validus::fast_rule;
 
 struct EmailError;
 struct Email;
-cheap_rule!(Email,
+fast_rule!(Email,
     err = EmailError,
     msg = "no @ symbol",
     |s: &str| s.contains('@')
@@ -270,7 +270,7 @@ use validus::prelude::*;
 use validus::easy_rule;
 
 // easy_rule is a different macro that helps you define rules.
-// The difference with cheap_rule! is that leaves the error type
+// The difference with fast_rule! is that leaves the error type
 // untouched, and you need to return a Result<(), YourError>
 // instead of a bool in the closure.
 struct No;
@@ -312,16 +312,16 @@ between any two rules.)
 // Implication means: "Whenever [rule] A says good, so does B."
 
 use validus::prelude::*;
-use validus::cheap_rule;
+use validus::fast_rule;
 
 // Less generous
 struct A;
-cheap_rule!(A, msg = "no wow", |s: &str| s.contains("wow"));
+fast_rule!(A, msg = "no wow", |s: &str| s.contains("wow"));
 
 // More generous: includes all strings that A accepts and
 // perhaps more.
 struct B;
-cheap_rule!(B, msg = "neither wow nor bad found", |s: &str| {
+fast_rule!(B, msg = "neither wow nor bad found", |s: &str| {
     s.contains("wow") || s.contains("bad")
 });
 

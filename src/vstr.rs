@@ -273,15 +273,15 @@ impl<Rule: ValidateString> VStr<Later<Rule>> {
 ///
 /// # Example
 ///
-/// See also: [`cheap_rule`](crate::cheap_rule).
+/// See also: [`fast_rule`](crate::fast_rule).
 ///
 /// ```
 /// use validus::prelude::*;
-/// use validus::cheap_rule;
+/// use validus::fast_rule;
 ///
 /// struct EmailError;
 /// struct Email;
-/// cheap_rule!(Email,
+/// fast_rule!(Email,
 ///     err = EmailError,
 ///     msg = "no @ symbol",
 ///     |s: &str| s.contains('@')
@@ -583,7 +583,7 @@ impl<Rule: ValidateString> Hash for VStr<Rule> {
 ///
 /// # See Also
 ///
-/// - [`cheap_rule`](crate::cheap_rule) for ad-hoc or simple errors.
+/// - [`fast_rule`](crate::fast_rule) for ad-hoc or simple errors.
 /// - [`ValidateString`]
 ///
 /// # Example
@@ -622,7 +622,7 @@ macro_rules! easy_rule {
 /// This is done by implementing [`ValidateString`] for your
 /// rule using the closure. Since [`ValidateString`] expects
 /// your closure to return `Result<(), Error>` (where `Error` refers
-/// to some choice of an error type), [`cheap_rule`](crate::cheap_rule)
+/// to some choice of an error type), [`fast_rule`](crate::fast_rule)
 /// converts your closure's return type to `Result<(), Error>`
 /// so that `true` is mapped to `Ok(())` and `false` is mapped
 /// to your error type or error message.
@@ -642,7 +642,7 @@ macro_rules! easy_rule {
 ///
 /// ```
 /// use validus::prelude::*;
-/// use validus::cheap_rule;
+/// use validus::fast_rule;
 ///
 /// // 1. String errors.
 /// // The error type is &'static str.
@@ -650,25 +650,25 @@ macro_rules! easy_rule {
 /// // 1a. Define your rule. I called it Email.
 /// struct Email;
 /// // 1b. Implement ValidateString for your rule
-/// // using cheap_rule!.
-/// cheap_rule!(Email, msg = "invalid email", |s: &str| {
+/// // using fast_rule!.
+/// fast_rule!(Email, msg = "invalid email", |s: &str| {
 ///     s.contains('@')
 /// });
 /// // 1c. Try it out.
 /// let vv: &vstr<Email> = "hello@world".validate::<Email>().unwrap();
 ///
 /// // 2. Your error type.
-/// // cheap_rule! implements Debug + Display + Error.
+/// // fast_rule! implements Debug + Display + Error.
 /// // Both the Debug and Display errors are made to display the string
 /// // "invalid phone number".
 ///
 /// // 2a. Define your error type. Make it a ZST.
-/// // cheap_rule! will implement Debug, Display, and Error for you.
+/// // fast_rule! will implement Debug, Display, and Error for you.
 /// struct BadPhoneError;
 /// // 2b. Define your rule.
 /// struct Phone;
 /// // 2c. Implement ValidateString for your rule.
-/// cheap_rule!(Phone,
+/// fast_rule!(Phone,
 ///     err = BadPhoneError,
 ///     msg = "invalid phone number",
 ///     |s: &str| {
@@ -683,7 +683,7 @@ macro_rules! easy_rule {
 /// assert_eq!(vv.to_string(), "invalid phone number");
 /// ```
 #[macro_export]
-macro_rules! cheap_rule {
+macro_rules! fast_rule {
     ($name:ident, msg = $msg:expr, $func:expr) => {
         impl $crate::vstr::ValidateString for $name {
             type Error = &'static str;
@@ -812,14 +812,14 @@ use alloc::borrow::Cow;
 /// # use std::borrow::Cow;
 /// #
 /// use validus::prelude::*;
-/// use validus::cheap_rule;
+/// use validus::fast_rule;
 ///
 /// use serde::Deserialize;
 ///
 /// // Define a rule. Let's say, zip codes (US).
 /// // Very simplistic; only the 5 digit zip codes.
 /// struct ZipCodeRule;
-/// cheap_rule!(ZipCodeRule, msg = "invalid zip code", |s: &str| {
+/// fast_rule!(ZipCodeRule, msg = "invalid zip code", |s: &str| {
 ///     s.len() == 5 && s.chars().all(|c| c.is_ascii_digit())
 /// });
 ///
@@ -1027,10 +1027,10 @@ impl<'a, R: ValidateString> VCow<'a, R> {
     /// use std::borrow::Cow;
     ///
     /// use validus::prelude::*;
-    /// use validus::cheap_rule;
+    /// use validus::fast_rule;
     ///
     /// struct UsernameRule;
-    /// cheap_rule!(
+    /// fast_rule!(
     ///     UsernameRule,
     ///     msg = "bad username",
     ///     |s: &str| {

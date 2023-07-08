@@ -24,7 +24,7 @@
 //! NOTE: For dynamic bounds, please define your own rules.
 //! Your rule just needs to implement [`ValidateString`].
 //!
-//! The helpful macros [`easy_rule`](crate::easy_rule) and [`cheap_rule`](crate::cheap_rule)
+//! The helpful macros [`easy_rule`](crate::easy_rule) and [`fast_rule`](crate::fast_rule)
 //! can help you with this task.
 //!
 //! ## String content checking
@@ -35,7 +35,7 @@ use std::{fmt::Display, marker::PhantomData};
 
 use thiserror::Error;
 
-use crate::{cheap_rule, vstr::*};
+use crate::{fast_rule, vstr::*};
 
 /// Out of range (bytes)
 ///
@@ -387,7 +387,7 @@ pub struct StringHadNonAsciiError;
 /// Require the string to not have any non-ASCII bytes.
 pub struct StringAsciiRule;
 
-cheap_rule!(
+fast_rule!(
     StringAsciiRule,
     err = StringHadNonAsciiError,
     msg = "string had non-ASCII bytes",
