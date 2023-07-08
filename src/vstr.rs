@@ -1,14 +1,15 @@
 //! Validated string slice
 
-use std::{
+use core::{
     convert::Infallible,
     fmt::{Debug, Display},
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem::transmute,
-    rc::Rc,
-    sync::Arc,
 };
+
+#[cfg(feature = "alloc")]
+use alloc::{rc::Rc, sync::Arc, string::String, boxed::Box, borrow::ToOwned};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -505,13 +506,13 @@ impl<'a> StrExt<'a> for &'a str {
 }
 
 impl<Rule: ValidateString> Debug for VStr<Rule> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         Debug::fmt(&self.inner, f)
     }
 }
 
 impl<Rule: ValidateString> Display for VStr<Rule> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         Display::fmt(&self.inner, f)
     }
 }
@@ -537,25 +538,25 @@ impl<Rule: ValidateString> PartialEq<VStr<Rule>> for str {
 }
 
 impl<Rule1: ValidateString, Rule2: ValidateString> PartialOrd<VStr<Rule2>> for VStr<Rule1> {
-    fn partial_cmp(&self, other: &VStr<Rule2>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &VStr<Rule2>) -> Option<core::cmp::Ordering> {
         self.inner.partial_cmp(&other.inner)
     }
 }
 
 impl<Rule: ValidateString> Ord for VStr<Rule> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.inner.cmp(&other.inner)
     }
 }
 
 impl<Rule: ValidateString> PartialOrd<str> for VStr<Rule> {
-    fn partial_cmp(&self, other: &str) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &str) -> Option<core::cmp::Ordering> {
         self.inner.partial_cmp(other)
     }
 }
 
 impl<Rule: ValidateString> PartialOrd<VStr<Rule>> for str {
-    fn partial_cmp(&self, other: &VStr<Rule>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &VStr<Rule>) -> Option<core::cmp::Ordering> {
         self.partial_cmp(&other.inner)
     }
 }
@@ -688,22 +689,24 @@ macro_rules! cheap_rule {
             }
         }
     };
+
     ($name:ty, err = $err:tt, msg = $msg:expr, $func:expr) => {
         // Implement the Display type on the error type.
-        impl std::fmt::Display for $err {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                std::fmt::Display::fmt($msg, f)
+        impl core::fmt::Display for $err {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Display::fmt($msg, f)
             }
         }
 
         // Similarly, Debug.
-        impl std::fmt::Debug for $err {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                std::fmt::Debug::fmt($msg, f)
+        impl core::fmt::Debug for $err {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Debug::fmt($msg, f)
             }
         }
 
-        // And, Error.
+        // Error, if std feature is enabled.
+        #[cfg(feature = "std")]
         impl std::error::Error for $err {}
 
         // ValidateString, now.
@@ -739,8 +742,8 @@ macro_rules! with_cow_feature {
 }
 
 with_cow_feature! {
-
-use std::{borrow::Cow, ops::Deref};
+use core::ops::Deref;
+use alloc::borrow::Cow;
 
 /// An immutable string (or string slice) that may or may not have been validated
 /// according to a certain rule. The validation status is tracked at runtime.
@@ -1082,14 +1085,14 @@ impl<'a, R: ValidateString> VCow<'a, R> {
 }
 
 impl<R: ValidateString> Display for VCow<'_, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.cow, f)
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.cow, f)
     }
 }
 
 impl<R: ValidateString> Debug for VCow<'_, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.cow, f)
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.cow, f)
     }
 }
 
@@ -1176,37 +1179,37 @@ impl<R: ValidateString> PartialEq<String> for VCow<'_, R> {
 impl<R: ValidateString> Eq for VCow<'_, R> {}
 
 impl<R: ValidateString, S: ValidateString> PartialOrd<VCow<'_, R>> for VCow<'_, S> {
-    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<core::cmp::Ordering> {
         self.cow.partial_cmp(&other.cow)
     }
 }
 
 impl<R: ValidateString> PartialOrd<str> for VCow<'_, R> {
-    fn partial_cmp(&self, other: &str) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &str) -> Option<core::cmp::Ordering> {
         self.as_str().partial_cmp(other)
     }
 }
 
 impl<R: ValidateString> PartialOrd<VCow<'_, R>> for str {
-    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<core::cmp::Ordering> {
         self.partial_cmp(other.as_str())
     }
 }
 
 impl<R: ValidateString> PartialOrd<&str> for VCow<'_, R> {
-    fn partial_cmp(&self, other: &&str) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &&str) -> Option<core::cmp::Ordering> {
         self.as_str().partial_cmp(*other)
     }
 }
 
 impl<R: ValidateString> PartialOrd<VCow<'_, R>> for &str {
-    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &VCow<'_, R>) -> Option<core::cmp::Ordering> {
         self.partial_cmp(&other.as_str())
     }
 }
 
 impl<R: ValidateString> Ord for VCow<'_, R> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }

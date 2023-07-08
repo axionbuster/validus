@@ -397,3 +397,6 @@ wrapper type that tracks the validity of the `vstr` that may change at runtime.
 
 - (default) `serde`: enables `serde` support. Pulls in `serde` as a dependency.
 - (default) `ext`: enables built-in extensions. Pulls in `thiserror` as a dependency.
+- (default) `std`: enables `std` support. Necessary to implement the `Error` trait. Pulls in `std` as a dependency.
+- (default) `alloc`: integrates with `alloc` crate., and enables smart pointers.
+- `cow`: enables the experimental `VCow` type. Pulls in `alloc` as a dependency.

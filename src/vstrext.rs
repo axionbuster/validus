@@ -33,9 +33,9 @@
 
 use std::{fmt::Display, marker::PhantomData};
 
-use crate::{cheap_rule, vstr::*};
-
 use thiserror::Error;
+
+use crate::{cheap_rule, vstr::*};
 
 /// Out of range (bytes)
 ///
@@ -59,7 +59,7 @@ pub struct StringSizeOutOfRangeError {
 }
 
 impl Display for StringSizeOutOfRangeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "string size range falsified: ")?;
         if self.min != 0 {
             write!(f, "{} <= ", self.min)?;
@@ -230,8 +230,8 @@ impl<L, R> EitherError<L, R> {
     }
 
     /// Find the discriminant.
-    pub fn discriminant(&self) -> std::mem::Discriminant<Self> {
-        std::mem::discriminant(self)
+    pub fn discriminant(&self) -> core::mem::Discriminant<Self> {
+        core::mem::discriminant(self)
     }
 }
 
