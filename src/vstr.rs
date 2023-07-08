@@ -9,7 +9,7 @@ use core::{
 };
 
 #[cfg(feature = "alloc")]
-use alloc::{rc::Rc, sync::Arc, string::String, boxed::Box, borrow::ToOwned};
+use alloc::{borrow::ToOwned, boxed::Box, rc::Rc, string::String, sync::Arc};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

@@ -1,6 +1,5 @@
 //! `validus` --- validated string slices
 #![doc = include_str!("../README.md")]
-
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
 extern crate alloc;
